@@ -66,6 +66,7 @@ export class AuthSession {
    * @param {object} opts
    * @param {import('./transport.js').Transport} opts.transport
    * @param {OtpProvider}                          opts.otpProvider
+   * @param {boolean}                             [opts.demo]          - use demo auth (JSON refresh)
    * @param {(msg:string,data?:any)=>void}        [opts.log]
    * @param {(snap: SessionSnapshot|null)=>void|Promise<void>} [opts.onSessionChange]
    *   Invoked whenever the session state changes (after login, refresh, or
@@ -77,6 +78,7 @@ export class AuthSession {
     if (!opts.otpProvider) throw new ValidationError('AuthSession: otpProvider is required');
     this.transport = opts.transport;
     this.otpProvider = opts.otpProvider;
+    this.demo = opts.demo ?? false;
     this.log = opts.log || (() => {});
     this.onSessionChange = opts.onSessionChange || null;
 
@@ -192,7 +194,8 @@ export class AuthSession {
           client_id: CLIENT_ID,
           refresh_token: rt,
         };
-        const r = await this.transport.post(AUTH_PATH, { body, form: true, noAuth: true });
+        // Real mode uses form-encoded; demo mode uses JSON (same endpoint, different format).
+        const r = await this.transport.post(AUTH_PATH, { body, form: !this.demo, noAuth: true });
         if (!r.access_token) {
           throw new AuthError('Refresh response missing access_token', { body: r });
         }

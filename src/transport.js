@@ -21,6 +21,7 @@ const AUTH_EXCLUSIONS = ['/api/auth/time', '/api/auth/token'];
 /**
  * @typedef {object} TransportOptions
  * @property {string} [baseUrl]        - defaults to https://evo.bt-trade.ro
+ * @property {string} [pathPrefix]     - prepended to every path, e.g. '/demo' for demo mode
  * @property {object} [session]        - AuthSession (see auth.js)
  * @property {(msg:string,data?:any)=>void} [log]  - optional logger for debug
  * @property {number} [timeoutMs]      - per-request timeout (default 30_000)
@@ -30,6 +31,7 @@ export class Transport {
   /** @param {TransportOptions} opts */
   constructor(opts = {}) {
     this.baseUrl = opts.baseUrl || 'https://evo.bt-trade.ro';
+    this.pathPrefix = opts.pathPrefix || '';
     this.session = opts.session || null;
     this.log = opts.log || (() => {});
     this.timeoutMs = opts.timeoutMs ?? 30_000;
@@ -133,7 +135,7 @@ export class Transport {
   // --- private ---
 
   #buildUrl(path, query) {
-    let url = this.baseUrl.replace(/\/$/, '') + path;
+    let url = this.baseUrl.replace(/\/$/, '') + this.pathPrefix + path;
     if (query) {
       const qs = new URLSearchParams();
       for (const [k, v] of Object.entries(query)) {

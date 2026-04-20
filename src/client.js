@@ -29,6 +29,7 @@ import { ValidationError } from './errors.js';
 /**
  * @typedef {object} ClientOptions
  * @property {string}   [baseUrl]        - default 'https://evo.bt-trade.ro'
+ * @property {boolean}  [demo]           - use BT Trade demo environment (paper trading)
  * @property {import('./auth.js').OtpProvider} [otpProvider]
  *                                       - default: interactive stdin (CLI use only)
  * @property {(msg:string,data?:any)=>void} [log]   - optional logger; pass console.error for debug
@@ -40,14 +41,18 @@ import { ValidationError } from './errors.js';
 export class BTTradeClient {
   /** @param {ClientOptions} [opts] */
   constructor(opts = {}) {
+    const demo = opts.demo ?? false;
+    this.demo = demo;
     this.transport = new Transport({
       baseUrl: opts.baseUrl,
+      pathPrefix: demo ? '/demo' : '',
       log: opts.log,
       timeoutMs: opts.timeoutMs,
     });
     this.auth = new AuthSession({
       transport: this.transport,
       otpProvider: opts.otpProvider || stdinOtpProvider(),
+      demo,
       log: opts.log,
       onSessionChange: opts.onSessionChange,
     });

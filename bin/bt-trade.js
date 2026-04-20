@@ -19,7 +19,8 @@ import path from 'node:path';
 import { BTTradeClient, stdinOtpProvider, ntfyOtpProvider, BTTradeError, AuthError } from '../src/index.js';
 
 const DEBUG = process.argv.includes('--debug');
-const SESSION_FILE = path.join(os.tmpdir(), 'bt-trade-session.json');
+const DEMO  = process.argv.includes('--demo');
+const SESSION_FILE = path.join(os.tmpdir(), `bt-trade-session${DEMO ? '-demo' : ''}.json`);
 
 function pickOtpMode() {
   if (process.argv.includes('--otp-stdin')) return { mode: 'stdin' };
@@ -562,7 +563,10 @@ async function main() {
     console.log('OTP delivery: terminal (stdin)');
   }
 
+  if (DEMO) console.log('Mode: DEMO (paper trading)\n');
+
   const client = new BTTradeClient({
+    demo: DEMO,
     otpProvider: otpMode.mode === 'ntfy'
       ? ntfyOtpProvider({ topic: otpMode.topic || undefined, log })
       : stdinOtpProvider(),

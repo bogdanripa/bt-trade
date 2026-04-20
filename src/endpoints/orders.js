@@ -91,4 +91,80 @@ export class OrdersApi {
     if (!orderNumber) throw new ValidationError('orders.getHistory: orderNumber required');
     return this.transport.get('/api/api/Orders/History/Get', { query: { orderNumber } });
   }
+
+  /**
+   * Preview an order — returns fee breakdown, margin impact, and estimated total
+   * before committing. Call this to show the user what they're about to pay.
+   *
+   * @param {object} args
+   * @param {string} args.portfolioKey
+   * @param {string} args.symbol          - ticker code, e.g. "TVBETETF"
+   * @param {number} args.marketId        - exchange ID from markets.list()
+   * @param {number|string|null} [args.quantity]
+   * @param {number|string} args.price
+   * @param {'buy'|'sell'} args.side
+   * @param {'limit'|'market'} [args.type]  - default 'limit'
+   */
+  preview({ portfolioKey, symbol, marketId, quantity = null, price, side, type = 'limit' } = {}) {
+    if (!portfolioKey) throw new ValidationError('orders.preview: portfolioKey required');
+    if (!symbol)       throw new ValidationError('orders.preview: symbol required');
+    if (!marketId)     throw new ValidationError('orders.preview: marketId required');
+    if (!side)         throw new ValidationError('orders.preview: side required');
+    return this.transport.post('/api/api/Orders/GetOrderDetails', {
+      body: {
+        portfolioKey,
+        symbol: { code: symbol, marketId: Number(marketId) },
+        quantity: quantity !== null && quantity !== undefined ? String(quantity) : null,
+        price: price !== undefined ? String(price) : undefined,
+        side,
+        type,
+      },
+    });
+  }
+
+  /**
+   * Place and sign an order in a single step.
+   * Internally calls GetConfirmation (to register the intent) then SaveOrder.
+   *
+   * @param {object} args
+   * @param {string} args.portfolioKey
+   * @param {string} args.symbol           - ticker code, e.g. "TVBETETF"
+   * @param {number} args.marketId         - exchange ID from markets.list()
+   * @param {number|string} args.quantity
+   * @param {number|string} args.price
+   * @param {'buy'|'sell'} args.side
+   * @param {'limit'|'market'} [args.type]        - default 'limit'
+   * @param {'day'|'gtc'|string} [args.valability] - default 'day'
+   * @returns {Promise<any>}  server response from SaveOrder
+   */
+  async placeOrder({ portfolioKey, symbol, marketId, quantity, price, side, type = 'limit', valability = 'day' } = {}) {
+    if (!portfolioKey) throw new ValidationError('orders.placeOrder: portfolioKey required');
+    if (!symbol)       throw new ValidationError('orders.placeOrder: symbol required');
+    if (!marketId)     throw new ValidationError('orders.placeOrder: marketId required');
+    if (!quantity)     throw new ValidationError('orders.placeOrder: quantity required');
+    if (!price)        throw new ValidationError('orders.placeOrder: price required');
+    if (!side)         throw new ValidationError('orders.placeOrder: side required');
+
+    const order = {
+      symbol:      { code: symbol, marketId: Number(marketId) },
+      portfolioKey,
+      quantity:    String(quantity),
+      side,
+      price:       String(price),
+      type,
+      valability,
+      signed:      false,
+      recaptcha:   null,
+    };
+
+    // Step 1: register the intent — server may validate and record the order.
+    await this.transport.post('/api/api/Orders/GetConfirmation', {
+      body: { action: 'sign', order, orderNumbers: [] },
+    });
+
+    // Step 2: submit with signed: true.
+    return this.transport.post('/api/api/Orders/SaveOrder', {
+      body: { order: { ...order, signed: true }, recaptcha: null },
+    });
+  }
 }
