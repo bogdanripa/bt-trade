@@ -200,8 +200,8 @@ automation just forwards the entire SMS body to ntfy. The Node side picks the
 
 1. Open **Shortcuts** → **Automation** tab → **+** → **New Automation**.
 2. Choose **Message** as the trigger.
-   - **Sender**: `BT Trade` (or whatever your BT Trade sender ID shows — usually a shortcode / alphanumeric sender, not a phone number).
-   - **Message**: leave blank (all messages from that sender).
+   - **Sender**: any
+   - **Message Contains**: este codul unic SMS generat. Verificati prefixul sa coincida cu cele de pe ecran, in caz contrar nu introduceti datele!
    - Turn **Run Immediately** on so it fires without a confirmation tap (iOS 18+).
 3. Add a single action: **Get Contents of URL**.
    - **URL**: `https://ntfy.sh/<your-topic>` — the URL from step 1 above.
