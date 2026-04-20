@@ -19,8 +19,8 @@ import path from 'node:path';
 import { BTTradeClient, stdinOtpProvider, ntfyOtpProvider, BTTradeError, AuthError } from '../src/index.js';
 
 const DEBUG = process.argv.includes('--debug');
-const DEMO  = process.argv.includes('--demo');
-const SESSION_FILE = path.join(os.tmpdir(), `bt-trade-session${DEMO ? '-demo' : ''}.json`);
+let DEMO  = process.argv.includes('--demo');
+let SESSION_FILE;
 
 function pickOtpMode() {
   if (process.argv.includes('--otp-stdin')) return { mode: 'stdin' };
@@ -293,6 +293,40 @@ function portfolioMenu(client, ctx) {
   ]);
 }
 
+async function doOrderPreview(client, ctx) {
+  heading('Order Preview');
+  const k = await ensurePortfolio(client, ctx);
+
+  const symbol = (await ask('Symbol (e.g. TVBETETF): ')).toUpperCase().trim();
+  if (!symbol) return;
+
+  // Let user pick market from the live list.
+  const markets = await client.markets.list();
+  markets.forEach((m, i) => console.log(`  [${i + 1}] ${m.name || m.code || '?'}  (id=${m.id})`));
+  const mRaw = await ask(`Market [1-${markets.length}]: `);
+  const mIdx = parseInt(mRaw, 10) - 1;
+  if (mIdx < 0 || mIdx >= markets.length) { console.log('  invalid selection'); return; }
+  const marketId = markets[mIdx].id;
+
+  const sideRaw = await ask('Side [1=buy / 2=sell]: ');
+  const side = sideRaw.trim() === '2' ? 'sell' : 'buy';
+
+  const typeRaw = await ask('Type [1=limit / 2=market]: ');
+  const type = typeRaw.trim() === '2' ? 'market' : 'limit';
+
+  let price;
+  if (type === 'limit') {
+    const pr = await ask('Price: ');
+    price = pr.trim() || undefined;
+  }
+
+  const qtyRaw = await ask('Quantity (blank to skip): ');
+  const quantity = qtyRaw.trim() || null;
+
+  const result = await client.orders.preview({ portfolioKey: k, symbol, marketId, quantity, price, side, type });
+  dump(result);
+}
+
 function ordersMenu(client, ctx) {
   const sideStr = (v) => typeof v === 'string' ? v : (v?.Short ?? v?.Name ?? v?.Value ?? '');
   const ORDER_COLS = [
@@ -307,6 +341,11 @@ function ordersMenu(client, ctx) {
   ];
 
   return menu('ORDERS', [
+    {
+      label: 'Preview order',
+      run: async () => { await doOrderPreview(client, ctx); },
+    },
+    { separator: true },
     {
       label: 'All orders',
       run: async () => {
@@ -553,7 +592,14 @@ function saveSession(snap) {
 }
 
 async function main() {
-  console.log('bt-trade interactive example\n');
+  console.log('bt-trade\n');
+
+  if (!DEMO) {
+    const ans = (await ask('Mode [1=real / 2=demo]: ')).trim();
+    DEMO = ans === '2';
+  }
+  SESSION_FILE = path.join(os.tmpdir(), `bt-trade-session${DEMO ? '-demo' : ''}.json`);
+  if (DEMO) console.log('  Demo mode (paper trading)\n');
 
   const otpMode = pickOtpMode();
   if (otpMode.mode === 'ntfy') {
