@@ -104,7 +104,7 @@ function table(rows, cols) {
   const widths  = headers.map((h) => h.length);
   const cells   = rows.map((row) =>
     cols.map((c, ci) => {
-      const raw = row[c.key];
+      const raw = c.format ? c.format(row[c.key], row) : row[c.key];
       let s;
       if (raw === null || raw === undefined) s = '';
       else if (typeof raw === 'number')      s = raw.toLocaleString('en', { maximumFractionDigits: 4 });
@@ -204,8 +204,15 @@ function referenceMenu(client) {
   ]);
 }
 
+function portfolioMenuTitle(ctx) {
+  if (!ctx.currencyId || !ctx.accounts) return 'PORTFOLIO';
+  const active = ctx.accounts.find((a) => a.portfolioKey === ctx.activePortfolioKey) || ctx.accounts[0];
+  const cur = active?.portfolios?.[0]?.currencies?.find((c) => c.id === ctx.currencyId);
+  return cur ? `PORTFOLIO (${cur.name})` : 'PORTFOLIO';
+}
+
 function portfolioMenu(client, ctx) {
-  return menu('PORTFOLIO', [
+  return menu(portfolioMenuTitle(ctx), [
     {
       label: 'Balance',
       run: async () => {
@@ -213,9 +220,9 @@ function portfolioMenu(client, ctx) {
         const c = await ensureCurrency(client, ctx);
         heading('Balance');
         table(await client.portfolio.getBalance({ portfolioKey: k, currencyId: c }), [
-          { key: 'title', label: 'Title', max: 35 },
-          { key: 'value', label: 'Value', align: 'right' },
-          { key: 'highlightText', label: 'Note', max: 20 },
+          { key: 'title',    label: 'Title',    max: 35 },
+          { key: 'value',    label: 'Amount',   align: 'right', format: (v) => v?.formatted ?? '' },
+          { key: 'value',    label: 'Currency', max: 6,         format: (v) => v?.currency  ?? '' },
         ]);
       },
     },
@@ -228,10 +235,10 @@ function portfolioMenu(client, ctx) {
         const sections = await client.portfolio.getBalanceInfo({ portfolioKey: k, currencyId: c });
         for (const sec of sections) {
           console.log('\n  ' + sec.title);
-          table(sec.balances, [
-            { key: 'title',           label: 'Item',  max: 35 },
-            { key: 'highlightText',   label: 'Note',  max: 20 },
-          ]);
+          sec.balances.forEach((b) => {
+            const prefix = b.highlightText ? '▶ ' : '  ';
+            console.log('  ' + prefix + b.title);
+          });
         }
       },
     },
@@ -263,7 +270,7 @@ function portfolioMenu(client, ctx) {
           { key: 'bank',          label: 'Bank',     max: 20 },
           { key: 'currency',      label: 'Currency', max: 6  },
           { key: 'country',       label: 'Country',  max: 10 },
-          { key: 'status',        label: 'Status',   max: 12 },
+          { key: 'status',        label: 'Status',   max: 15, format: (v) => v?.name ?? String(v ?? '') },
         ]);
       },
     },
@@ -273,10 +280,10 @@ function portfolioMenu(client, ctx) {
         const k = await ensurePortfolio(client, ctx);
         heading('Account transfers');
         table(await client.portfolio.getAccountsTransfer({ portfolioKey: k }), [
-          { key: 'title',             label: 'Account',    max: 30 },
-          { key: 'currency',          label: 'Currency',   max: 6  },
-          { key: 'balance',           label: 'Balance',    align: 'right' },
-          { key: 'availableTransfer', label: 'Available',  align: 'right' },
+          { key: 'title',             label: 'Account',   max: 15 },
+          { key: 'currency',          label: 'Ccy',       max: 4  },
+          { key: 'balance',           label: 'Balance',   align: 'right', format: (v) => v?.value?.formatted ?? String(v ?? '') },
+          { key: 'availableTransfer', label: 'Available', align: 'right', format: (v) => v?.value?.formatted ?? String(v ?? '') },
         ]);
       },
     },

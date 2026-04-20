@@ -104,24 +104,33 @@
 // ─── Portfolio ────────────────────────────────────────────────────────────────
 
 /**
+ * @typedef {object} MoneyValue
+ * @property {string} formatted   - localised display string, e.g. "1,234.56"
+ * @property {number} amount
+ * @property {string} currency    - ISO code, e.g. "RON"
+ * @property {string} direction   - "none" | "up" | "down"
+ */
+
+/**
  * One row in the GetBalances response array.
  * @typedef {object} BalanceEntry
- * @property {string}  title
- * @property {string}  type
- * @property {number}  value
- * @property {string}  highlightText
- * @property {string}  highlightBackground
- * @property {number}  balanceId
+ * @property {string}     title
+ * @property {string}     type
+ * @property {MoneyValue} value
+ * @property {string}     highlightText
+ * @property {string}     highlightBackground
+ * @property {number}     balanceId
  */
 
 /**
  * One entry inside a BalanceInfoSection.
+ * `highlightText` is a boolean that marks section totals / header rows.
  * @typedef {object} BalanceInfoEntry
- * @property {string} title
- * @property {string} type
- * @property {string} highlightText
- * @property {string} highlightBackground
- * @property {number} balanceId
+ * @property {string}  title
+ * @property {string}  type
+ * @property {boolean} highlightText
+ * @property {boolean} highlightBackground
+ * @property {number}  balanceId
  */
 
 /**
@@ -134,31 +143,35 @@
 /**
  * One row in the GetAccountsTransfer response array.
  * @typedef {object} AccountTransfer
- * @property {string}  title
- * @property {number}  currencyId
- * @property {string}  currency
- * @property {string}  country
- * @property {number}  balance
- * @property {number}  availableTransfer
- * @property {any[]}   allowedTransfers
+ * @property {string}      title
+ * @property {number}      currencyId
+ * @property {string}      currency
+ * @property {string}      country
+ * @property {object}      balance            - nested object with `.value.formatted`
+ * @property {object}      availableTransfer  - nested object with `.value.formatted`
+ * @property {any[]}       allowedTransfers
+ */
+
+/**
+ * @typedef {{ id: number, name: string }} StatusRef
  */
 
 /**
  * One row in the GetBankAccounts response array.
  * @typedef {object} BankAccount
- * @property {number}  bankAccountId
- * @property {string}  accountNumber
- * @property {string}  bank
- * @property {number}  bankId
- * @property {number}  currencyId
- * @property {string}  currency
- * @property {string}  country
- * @property {number}  countryId
- * @property {string}  swift
- * @property {boolean} enrollable
- * @property {any}     payment
- * @property {any}     balance
- * @property {string}  status
+ * @property {string}    bankAccountId
+ * @property {string}    accountNumber
+ * @property {string}    bank
+ * @property {number}    bankId
+ * @property {number}    currencyId
+ * @property {string}    currency
+ * @property {string}    country
+ * @property {number}    countryId
+ * @property {string}    swift
+ * @property {boolean}   enrollable
+ * @property {any}       payment
+ * @property {any}       balance
+ * @property {StatusRef} status
  */
 
 /**
