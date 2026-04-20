@@ -3,9 +3,6 @@
 Unofficial Node.js client for the **bt-trade.ro** trading platform. HTTP only
 — no SignalR, no WebSocket, no browser automation. Zero runtime dependencies.
 
-Built by reading the production Angular bundles (`chunk-*.js` under
-`www.bt-trade.ro`) and mapping the service methods to a clean module API.
-
 > Requires Node 18+ (uses built-in `fetch`).
 
 ## Disclaimer
@@ -132,14 +129,25 @@ All methods return parsed JSON from the server.
 
 ## OTP providers
 
-`otpProvider` is an `async (info) => string`. The default `stdinOtpProvider()`
-prompts on the terminal. For headless use supply your own:
+`otpProvider` is an `async (info) => string` where `info` carries
+`{ username, prefix, details, expiresIn }`. The default
+`stdinOtpProvider()` prompts on the terminal. The library ships two more
+providers ready to use, and a custom one is a one-liner:
 
 ```js
-const client = new BTTradeClient({
-  otpProvider: async ({ prefix, details }) => {
-    // read the latest bank SMS from your inbox/webhook/Telegram bot
-    // and return the 5 digits (with or without prefix — it's normalized)
+import { BTTradeClient, stdinOtpProvider, ntfyOtpProvider } from '@bogdanripa/bt-trade';
+
+// Terminal entry (interactive only)
+new BTTradeClient({ otpProvider: stdinOtpProvider() });
+
+// Phone-shortcut delivery via ntfy.sh (works headless)
+new BTTradeClient({ otpProvider: ntfyOtpProvider() });
+
+// Fully custom (Telegram bot, IMAP scraper, SMS-forwarder webhook, ...)
+new BTTradeClient({
+  otpProvider: async ({ username, prefix, details }) => {
+    // ... however you fetch the code ...
+    return '12345';
   },
 });
 ```
@@ -147,6 +155,102 @@ const client = new BTTradeClient({
 Only the digits the user typed are sent; the `prefix` is display-only. The
 client normalizes by stripping non-digits and removing the prefix if the user
 accidentally included it.
+
+### ntfy.sh + phone shortcut (recommended for headless / scheduled use)
+
+`ntfyOtpProvider()` long-polls a free [ntfy.sh](https://ntfy.sh) topic for the
+SMS code. A shortcut on your phone forwards the digits to that topic when the
+BT Trade SMS arrives. Stable URL, no inbound port, no tunnel, no account, zero
+ops.
+
+**Multi-account safe.** Multiple Node processes can share one ntfy topic
+because each provider filters incoming messages by its own `username`. Other
+users' codes are ignored.
+
+#### 1. Pick (or derive) your topic
+
+If you don't pass a `topic`, one is derived from the username:
+`bt-trade-otp-<sha256(username)[0:16]>`. Stable across runs, unique per user.
+Compute it ahead of time so you know what URL to put in the shortcut:
+
+```js
+import { defaultNtfyTopic } from '@bogdanripa/bt-trade';
+console.log(defaultNtfyTopic('M101021BR'));
+// → bt-trade-otp-a1b2c3d4e5f60718
+// → URL: https://ntfy.sh/bt-trade-otp-a1b2c3d4e5f60718
+```
+
+For stronger secrecy, pass an explicit unguessable topic:
+
+```js
+ntfyOtpProvider({ topic: 'bt-trade-' + crypto.randomUUID() })
+```
+
+> **Security note:** the OTP alone is useless without the password (BT Trade
+> requires both in the same request), so the default deterministic topic is
+> generally fine for personal use. If you want defense in depth, use an
+> explicit random topic and treat it like a password.
+
+#### 2. Build the iOS Shortcut (Apple)
+
+1. Open the **Shortcuts** app → tap **+** to create a new shortcut.
+2. Add the following actions in order:
+   1. **Ask for Input** — Question: `BT Trade username`. Default Answer: your username (e.g. `M101021BR`). Allow editing so you can switch when running multiple accounts.
+   2. **Ask for Input** — Question: `OTP code`. Input Type: `Number`.
+   3. **Dictionary** — add two key/value entries:
+      - `username` ← *Provided Input* from action 1
+      - `code` ← *Provided Input* from action 2
+   4. **Get Contents of URL** —
+      - URL: `https://ntfy.sh/<your-topic>` (replace with the topic from step 1)
+      - Method: `POST`
+      - Request Body: `JSON`, value = the *Dictionary* from action 3
+   5. **Show Notification** — Body: `Sent OTP for [Provided Input]`.
+3. Name the shortcut `BT Trade OTP` and **Add to Home Screen** (or pin to the lock-screen widget).
+
+When the BT Trade SMS arrives, tap the shortcut → enter the code → it's
+forwarded to ntfy.sh → your Node script picks it up.
+
+> **Auto-fill the OTP from the SMS:** instead of typing it, replace action 2
+> with `Get Latest Messages` (filter sender to `BTTRADE` / your bank's sender
+> ID) → `Match Text` with regex `\b\d{5}\b` to extract the 5 digits.
+
+> **Auto-trigger:** in iOS Shortcuts → Automation → "When I receive a message
+> from BTTRADE" → "Run Shortcut: BT Trade OTP". Apple still requires a one-tap
+> confirmation on Messages-triggered automations for privacy reasons, but it
+> reduces the manual effort to a single tap on the notification.
+
+#### 3. Build the Android equivalent (any of these works)
+
+- **Tasker** with the *Received Text* event filtered on the BT sender, then a
+  *HTTP Request* action POSTing the dictionary to your topic.
+- **MacroDroid** — *SMS Received* trigger → *Regex Match* → *HTTP Request*.
+- A purpose-built app like **SMS-to-URL Forwarder** with a regex template.
+
+The body the shortcut sends is just JSON; any tool that can do an HTTP POST
+will do. Plain-text formats also work (`username:code` or just `code`) — the
+provider parses all three.
+
+#### 4. Use it from Node
+
+```js
+import { BTTradeClient, ntfyOtpProvider } from '@bogdanripa/bt-trade';
+
+const client = new BTTradeClient({
+  otpProvider: ntfyOtpProvider({ /* topic: optional */ }),
+});
+
+await client.login({ username: 'M101021BR', password: process.env.BT_PASS });
+// ...your normal calls...
+```
+
+Or with the bundled CLI:
+
+```bash
+node bin/bt-trade.js                    # ntfy.sh, default topic from username
+node bin/bt-trade.js --ntfy-topic foo   # explicit topic
+BT_NTFY_TOPIC=foo node bin/bt-trade.js  # same, via env
+node bin/bt-trade.js --otp-stdin        # fall back to terminal entry
+```
 
 ## Errors
 

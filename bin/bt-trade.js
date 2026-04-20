@@ -16,10 +16,23 @@ import readline from 'node:readline/promises';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { BTTradeClient, stdinOtpProvider, BTTradeError, AuthError } from '../src/index.js';
+import { BTTradeClient, stdinOtpProvider, ntfyOtpProvider, BTTradeError, AuthError } from '../src/index.js';
 
 const DEBUG = process.argv.includes('--debug');
 const SESSION_FILE = path.join(os.tmpdir(), 'bt-trade-session.json');
+
+// Selects the OTP provider. Defaults to ntfy.sh (stable, phone-shortcut
+// friendly). The topic is either:
+//   - the value of --ntfy-topic <slug>
+//   - the BT_NTFY_TOPIC env var
+//   - derived deterministically from the username (default)
+// Pass --otp-stdin to fall back to terminal entry.
+function pickOtpMode() {
+  if (process.argv.includes('--otp-stdin')) return { mode: 'stdin' };
+  const i = process.argv.indexOf('--ntfy-topic');
+  const explicit = (i >= 0 && process.argv[i + 1]) || process.env.BT_NTFY_TOPIC || null;
+  return { mode: 'ntfy', topic: explicit };
+}
 const log = DEBUG
   ? (tag, data) => console.error('[' + tag + ']', typeof data === 'string' ? data : JSON.stringify(data).slice(0, 300))
   : undefined;
@@ -329,8 +342,18 @@ function saveSession(snap) {
 async function main() {
   console.log('bt-trade interactive example\n');
 
+  const otpMode = pickOtpMode();
+  if (otpMode.mode === 'ntfy') {
+    if (otpMode.topic) console.log(`OTP delivery: ntfy.sh topic "${otpMode.topic}"`);
+    else console.log(`OTP delivery: ntfy.sh (topic will be derived from username)`);
+  } else {
+    console.log('OTP delivery: terminal (stdin)');
+  }
+
   const client = new BTTradeClient({
-    otpProvider: stdinOtpProvider(),
+    otpProvider: otpMode.mode === 'ntfy'
+      ? ntfyOtpProvider({ topic: otpMode.topic || undefined, log })
+      : stdinOtpProvider(),
     log,
     onSessionChange: saveSession,   // persists after login / refresh / logout
   });

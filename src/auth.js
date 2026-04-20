@@ -25,6 +25,7 @@
  * from step 1 (the Angular interceptor attaches it transparently).
  */
 
+import crypto from 'node:crypto';
 import { AuthError, ValidationError, errorFromResponse } from './errors.js';
 
 const AUTH_PATH = '/api/RefreshToken';
@@ -42,6 +43,7 @@ const CLIENT_ID = 'bttrade';
 
 /**
  * @typedef {object} OtpPromptInfo
+ * @property {string} username      - username being authenticated (useful for multi-account providers)
  * @property {string} prefix        - displayed-only 2-digit prefix returned by step 1
  * @property {string} details       - human-readable message from server (romanian)
  * @property {number} expiresIn     - seconds until the SMS code expires
@@ -133,6 +135,7 @@ export class AuthSession {
       }
       const prefix = r1.prefix || '';
       const info = {
+        username: cleanUser,
         prefix,
         details: r1.details || 'SMS code required',
         expiresIn: Number(r1.expires_in) || 0,
@@ -267,6 +270,129 @@ export function normalizeOtp(typed, prefix) {
     return digits.slice(prefix.length);
   }
   return digits;
+}
+
+/**
+ * OTP provider that subscribes to an ntfy.sh topic and waits for a message
+ * addressed to the current username. Designed for "phone shortcut forwards
+ * the SMS" flows, where a hardcoded stable URL beats a per-run tunnel.
+ *
+ * Multi-account safe: many clients can share a single topic because the
+ * provider filters by `username`. Messages for other users are ignored.
+ *
+ * Expected message body (JSON, recommended):
+ *   {"username":"M101021BR","code":"12345"}
+ *
+ * Also accepted (plain text, as a fallback):
+ *   M101021BR:12345
+ *   M101021BR 12345
+ *
+ * @param {object} [opts]
+ * @param {string} [opts.topic]           - ntfy topic (your stable URL slug). If omitted, a
+ *                                          deterministic topic is derived from the username
+ *                                          via `defaultNtfyTopic(username)` (still stable per user
+ *                                          across runs; see SECURITY note in the README).
+ * @param {string} [opts.server]          - default 'https://ntfy.sh'
+ * @param {number} [opts.timeoutMs]       - abort if no matching message arrives; default 5 min
+ * @param {string} [opts.since]           - ntfy `since` filter; default '30s' to catch messages
+ *                                           the phone posted just before Node subscribed
+ * @param {(msg:string,data?:any)=>void} [opts.log]
+ */
+export function ntfyOtpProvider(opts = {}) {
+  const { topic: explicitTopic, server = 'https://ntfy.sh', timeoutMs = 5 * 60 * 1000, since = '30s', log = () => {} } = opts;
+
+  return async ({ username, details }) => {
+    const topic = explicitTopic || defaultNtfyTopic(username);
+    process.stderr.write(`\n[2FA] ${details}\n`);
+    process.stderr.write(`      Waiting for OTP on ${server}/${topic} (user: ${username}) …\n`);
+    if (!explicitTopic) {
+      process.stderr.write(`      (default topic derived from username; hardcode this URL in your phone shortcut)\n`);
+    }
+
+    const url = `${server.replace(/\/$/, '')}/${encodeURIComponent(topic)}/json?since=${encodeURIComponent(since)}`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const res = await fetch(url, { signal: controller.signal, headers: { Accept: 'application/x-ndjson' } });
+      if (!res.ok) throw new AuthError(`ntfy subscribe failed: ${res.status} ${await res.text().catch(() => '')}`);
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+
+      // Process NDJSON stream: one JSON envelope per line.
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) throw new AuthError('ntfy stream ended without a matching message');
+        buf += decoder.decode(value, { stream: true });
+
+        let nl;
+        while ((nl = buf.indexOf('\n')) >= 0) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (!line) continue;
+
+          let envelope;
+          try { envelope = JSON.parse(line); } catch { continue; }
+          if (envelope.event !== 'message') continue;   // skip 'open' / 'keepalive'
+
+          const { user: msgUser, code } = parseNtfyBody(envelope.message);
+          if (msgUser && msgUser !== username) {
+            log('ntfy:skipped', { reason: 'username-mismatch', msgUser });
+            continue;
+          }
+          if (code) return code;
+        }
+      }
+    } finally {
+      clearTimeout(timer);
+      try { controller.abort(); } catch (_) {}
+    }
+  };
+}
+
+/**
+ * Deterministic default topic for a given username: `bt-trade-otp-<16 hex chars>`
+ * where the hex is SHA-256 of the username. Stable across runs; unique per user.
+ *
+ * SECURITY NOTE: because the derivation is deterministic and the input space
+ * (BT Trade usernames) is small, a determined attacker who scrapes the source
+ * and enumerates usernames could guess the topic and subscribe to it. Without
+ * your password the OTP is still useless on its own, but if you want a
+ * stronger secret, pass an explicit `topic` with at least 128 bits of entropy
+ * (e.g. `crypto.randomUUID()`).
+ */
+export function defaultNtfyTopic(username) {
+  if (!username) throw new ValidationError('defaultNtfyTopic: username is required');
+  const hex = crypto.createHash('sha256').update('bt-trade-otp/' + username).digest('hex').slice(0, 16);
+  return `bt-trade-otp-${hex}`;
+}
+
+/** Parse ntfy message body to extract { user, code }. Tolerant of several shapes. */
+function parseNtfyBody(raw) {
+  if (!raw || typeof raw !== 'string') return { user: null, code: null };
+  const s = raw.trim();
+
+  // 1) JSON object with username + code
+  try {
+    const obj = JSON.parse(s);
+    if (obj && typeof obj === 'object') {
+      const user = obj.username || obj.user || null;
+      const code = obj.code ? String(obj.code).replace(/\D/g, '') : null;
+      if (code) return { user, code };
+    }
+  } catch (_) { /* fall through */ }
+
+  // 2) "username:code" or "username code"
+  const m = s.match(/^([A-Za-z0-9_.\-]+)[\s:]+(\d{4,8})\b/);
+  if (m) return { user: m[1], code: m[2] };
+
+  // 3) Bare digits — no username filter possible
+  const digits = s.replace(/\D/g, '');
+  if (digits.length >= 4 && digits.length <= 8) return { user: null, code: digits };
+
+  return { user: null, code: null };
 }
 
 /** Interactive OTP provider for CLI use. Prompts on stdin/stdout. */
