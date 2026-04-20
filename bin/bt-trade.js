@@ -204,11 +204,15 @@ function referenceMenu(client) {
   ]);
 }
 
-function portfolioMenuTitle(ctx) {
-  if (!ctx.currencyId || !ctx.accounts) return 'PORTFOLIO';
+function activeCurrencyName(ctx) {
+  if (!ctx.currencyId || !ctx.accounts) return null;
   const active = ctx.accounts.find((a) => a.portfolioKey === ctx.activePortfolioKey) || ctx.accounts[0];
-  const cur = active?.portfolios?.[0]?.currencies?.find((c) => c.id === ctx.currencyId);
-  return cur ? `PORTFOLIO (${cur.name})` : 'PORTFOLIO';
+  return active?.portfolios?.[0]?.currencies?.find((c) => c.id === ctx.currencyId)?.name ?? null;
+}
+
+function portfolioMenuTitle(ctx) {
+  const cur = activeCurrencyName(ctx);
+  return cur ? `PORTFOLIO (${cur})` : 'PORTFOLIO';
 }
 
 function portfolioMenu(client, ctx) {
@@ -230,18 +234,19 @@ function portfolioMenu(client, ctx) {
       label: 'Positions (snapshot)',
       run: async () => {
         const k = await ensurePortfolio(client, ctx);
+        const cur = activeCurrencyName(ctx) ?? '?';
         heading('Positions');
         const res = await client.portfolio.listPositions({ portfolioKey: k });
         table(res.Positions.Items, [
-          { key: 'Code',             label: 'Symbol',      max: 10 },
-          { key: 'Market',           label: 'Market',      max: 8  },
-          { key: 'SecurityBalance',  label: 'Qty',         align: 'right' },
-          { key: 'AvgPrice',         label: 'Avg Price',   align: 'right' },
-          { key: 'LineEvaluation',   label: 'Value',       align: 'right' },
-          { key: 'GainLoss',         label: 'Gain/Loss',   align: 'right' },
-          { key: 'PriceVariation',   label: 'Chg %',       align: 'right' },
+          { key: 'Code',             label: 'Symbol',           max: 10 },
+          { key: 'Market',           label: 'Market',           max: 8  },
+          { key: 'SecurityBalance',  label: 'Qty',              align: 'right' },
+          { key: 'AvgPrice',         label: 'Avg Price',        align: 'right' },
+          { key: 'LineEvaluation',   label: `Value (${cur})`,   align: 'right' },
+          { key: 'GainLoss',         label: `Gain/Loss (${cur})`, align: 'right' },
+          { key: 'PriceVariation',   label: 'Chg %',            align: 'right' },
         ]);
-        console.log('\n  Total positions: ' + res.Positions.TotalItemCount);
+        console.log(`  ${res.Positions.TotalItemCount} positions across all sub-portfolios`);
       },
     },
     {
