@@ -92,25 +92,28 @@ export class PortfolioApi {
    *
    * @param {object} args
    * @param {string} args.portfolioKey
+   * @param {string} [args.market]         - filter by market code, e.g. "BVB", "LSE USD". Client-side.
    * @param {string|Date} [args.endDate]   - DD.MM.YYYY, ISO 'YYYY-MM-DD', or Date.
    *                                          Defaults to today. Sent as DD.MM.YYYY.
    * @param {object} [args.queryModel]     - {fieldKeys, sortKey, sortDirection, page, pageSize}
    * @returns {Promise<import('../types.js').PortfolioSelectResult>}
    */
-  getHoldings({ portfolioKey, endDate, queryModel } = {}) {
+  async getHoldings({ portfolioKey, market, endDate, queryModel } = {}) {
     if (!portfolioKey) throw new ValidationError('getHoldings: portfolioKey required');
     const qm = { ...(queryModel || {}) };
     if (qm.page === undefined) qm.page = 1;
     if (qm.pageSize === undefined) qm.pageSize = 200;
-    return this.transport.post('/api/api/Portfolio/Select', {
+    const result = await this.transport.post('/api/api/Portfolio/Select', {
       body: {
         queryModel: qm,
-        criteria: {
-          portfolioKey,
-          endDate: toServerDate(endDate),
-        },
+        criteria: { portfolioKey, endDate: toServerDate(endDate) },
       },
     });
+    if (market && result?.Positions?.Items) {
+      result.Positions.Items = result.Positions.Items.filter((p) => p.Market === market);
+      result.Positions.TotalItemCount = result.Positions.Items.length;
+    }
+    return result;
   }
 }
 

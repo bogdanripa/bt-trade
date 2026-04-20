@@ -149,17 +149,23 @@ function kv(obj, keys) {
 async function menu(title, items) {
   while (true) {
     console.log('\n' + (typeof title === 'function' ? title() : title));
-    items.forEach((it, i) => console.log(`  [${i + 1}] ${it.label}`));
+    let menuIdx = 0;
+    items.forEach((it) => {
+      if (it.separator) { console.log('  ' + '─'.repeat(38)); return; }
+      console.log(`  [${++menuIdx}] ${typeof it.label === 'function' ? it.label() : it.label}`);
+    });
     const raw = await ask('> ');
     const idx = parseInt(raw, 10) - 1;
-    if (Number.isNaN(idx) || idx < 0 || idx >= items.length) {
+    const selectable = items.filter((it) => !it.separator);
+    if (Number.isNaN(idx) || idx < 0 || idx >= selectable.length) {
       console.log('  (pick a valid option)');
       continue;
     }
-    const chosen = items[idx];
+    const chosen = selectable[idx];
     if (chosen.back || chosen.quit) return chosen;
+    const label = typeof chosen.label === 'function' ? chosen.label() : chosen.label;
     try { await chosen.run(); }
-    catch (e) { warn(chosen.label, e); }
+    catch (e) { warn(label, e); }
   }
 }
 
@@ -210,43 +216,73 @@ function activeCurrencyName(ctx) {
   return active?.portfolios?.[0]?.currencies?.find((c) => c.id === ctx.currencyId)?.name ?? null;
 }
 
-function portfolioMenuTitle(ctx) {
-  const cur = activeCurrencyName(ctx);
-  return cur ? `PORTFOLIO (${cur})` : 'PORTFOLIO';
+function activeAccountName(ctx) {
+  if (!ctx.accounts || !ctx.activePortfolioKey) return null;
+  return ctx.accounts.find((a) => a.portfolioKey === ctx.activePortfolioKey)?.displayName ?? null;
 }
 
 function portfolioMenu(client, ctx) {
-  return menu(() => portfolioMenuTitle(ctx), [
+  const CASH_COLS = [
+    { key: 'title', label: 'Title',    max: 35 },
+    { key: 'value', label: 'Amount',   align: 'right', format: (v) => v?.formatted ?? '' },
+    { key: 'value', label: 'Currency', max: 6,         format: (v) => v?.currency  ?? '' },
+  ];
+
+  const holdingsCols = () => {
+    const cur = activeCurrencyName(ctx) ?? '?';
+    return [
+      { key: 'Code',            label: 'Symbol',             max: 10 },
+      { key: 'Market',          label: 'Market',             max: 10 },
+      { key: 'SecurityBalance', label: 'Qty',                align: 'right' },
+      { key: 'AvgPrice',        label: 'Avg Price',          align: 'right' },
+      { key: 'LineEvaluation',  label: `Value (${cur})`,     align: 'right' },
+      { key: 'GainLoss',        label: `Gain/Loss (${cur})`, align: 'right' },
+      { key: 'PriceVariation',  label: 'Chg %',              align: 'right' },
+    ];
+  };
+
+  return menu('HOLDINGS & CASH', [
+    {
+      label: () => `Account: ${activeAccountName(ctx) ?? '(none)'}`,
+      run: async () => { await chooseAccount(client, ctx); },
+    },
+    {
+      label: () => `Currency: ${activeCurrencyName(ctx) ?? 'All'}`,
+      run: async () => { await chooseCurrency(client, ctx); },
+    },
+    {
+      label: () => `Market: ${ctx.marketFilter ?? 'All'}`,
+      run: async () => { await chooseMarket(client, ctx); },
+    },
+    { separator: true },
     {
       label: 'Cash',
       run: async () => {
         const k = await ensurePortfolio(client, ctx);
-        const c = await ensureCurrency(client, ctx);
         heading('Cash');
-        table(await client.portfolio.getCash({ portfolioKey: k, currencyId: c }), [
-          { key: 'title',    label: 'Title',    max: 35 },
-          { key: 'value',    label: 'Amount',   align: 'right', format: (v) => v?.formatted ?? '' },
-          { key: 'value',    label: 'Currency', max: 6,         format: (v) => v?.currency  ?? '' },
-        ]);
+        if (ctx.currencyId) {
+          table(await client.portfolio.getCash({ portfolioKey: k, currencyId: ctx.currencyId }), CASH_COLS);
+        } else {
+          if (!ctx.accounts) await doAccounts(client, ctx);
+          const active = ctx.accounts.find((a) => a.portfolioKey === k) || ctx.accounts[0];
+          const currencies = active?.portfolios?.[0]?.currencies ?? [];
+          if (!currencies.length) { console.log('  No currencies found — set a display currency first.'); return; }
+          for (const cur of currencies) {
+            console.log(`\n  ── ${cur.name} ─────────────────────────`);
+            table(await client.portfolio.getCash({ portfolioKey: k, currencyId: cur.id }), CASH_COLS);
+          }
+        }
       },
     },
     {
       label: 'Holdings',
       run: async () => {
         const k = await ensurePortfolio(client, ctx);
-        const cur = activeCurrencyName(ctx) ?? '?';
         heading('Holdings');
-        const res = await client.portfolio.getHoldings({ portfolioKey: k });
-        table(res.Positions.Items, [
-          { key: 'Code',             label: 'Symbol',           max: 10 },
-          { key: 'Market',           label: 'Market',           max: 8  },
-          { key: 'SecurityBalance',  label: 'Qty',              align: 'right' },
-          { key: 'AvgPrice',         label: 'Avg Price',        align: 'right' },
-          { key: 'LineEvaluation',   label: `Value (${cur})`,   align: 'right' },
-          { key: 'GainLoss',         label: `Gain/Loss (${cur})`, align: 'right' },
-          { key: 'PriceVariation',   label: 'Chg %',            align: 'right' },
-        ]);
-        console.log(`  ${res.Positions.TotalItemCount} positions across all sub-portfolios`);
+        const res = await client.portfolio.getHoldings({ portfolioKey: k, market: ctx.marketFilter ?? undefined });
+        table(res.Positions.Items, holdingsCols());
+        const suffix = ctx.marketFilter ? ` on ${ctx.marketFilter}` : ' across all markets';
+        console.log(`  ${res.Positions.TotalItemCount} position${res.Positions.TotalItemCount !== 1 ? 's' : ''}${suffix}`);
       },
     },
     {
@@ -276,8 +312,6 @@ function portfolioMenu(client, ctx) {
         ]);
       },
     },
-    { label: 'Switch active account',      run: async () => { await chooseAccount(client, ctx); } },
-    { label: 'Display currency',           run: async () => { await chooseCurrency(client, ctx); } },
     { label: 'Go back', back: true },
   ]);
 }
@@ -399,6 +433,10 @@ async function doAccounts(client, ctx) {
 async function chooseAccount(client, ctx) {
   if (!ctx.accounts) await doAccounts(client, ctx);
   if (!ctx.accounts || !ctx.accounts.length) return;
+  ctx.accounts.forEach((a, i) => {
+    const mark = ctx.activePortfolioKey === a.portfolioKey ? '★' : ' ';
+    console.log(` ${mark} [${i + 1}] ${a.displayName || '(no name)'}`);
+  });
   const raw = await ask(`pick account [1-${ctx.accounts.length}]: `);
   const idx = parseInt(raw, 10) - 1;
   if (idx >= 0 && idx < ctx.accounts.length) {
@@ -435,15 +473,36 @@ async function chooseCurrency(client, ctx) {
   if (!list.length) { list = await client.reference.listEvaluationCurrencies(); source = 'evaluation currencies (global)'; }
   if (!Array.isArray(list) || !list.length) { console.log('no currencies available'); return; }
   console.log(`From: ${source}`);
-  list.forEach((c, i) => {
-    const mark = c.id === ctx.currencyId ? '★' : ' ';
-    console.log(` ${mark} [${i + 1}] id=${c.id}  ${c.name || c.description || ''}`);
+  const options = [{ id: null, name: 'All currencies' }, ...list];
+  options.forEach((c, i) => {
+    const mark = (i === 0 ? ctx.currencyId === null : c.id === ctx.currencyId) ? '★' : ' ';
+    console.log(` ${mark} [${i + 1}] ${c.name || c.description || ''}`);
   });
-  const raw = await ask(`pick currency [1-${list.length}]: `);
+  const raw = await ask(`pick currency [1-${options.length}]: `);
   const idx = parseInt(raw, 10) - 1;
-  if (idx >= 0 && idx < list.length) {
-    ctx.currencyId = list[idx].id;
-    console.log('active currency set to id=' + ctx.currencyId);
+  if (idx >= 0 && idx < options.length) {
+    ctx.currencyId = options[idx].id;
+    console.log(ctx.currencyId === null ? 'currency filter cleared (all)' : 'display currency set to ' + options[idx].name);
+  }
+}
+
+async function chooseMarket(client, ctx) {
+  const k = await ensurePortfolio(client, ctx);
+  const res = await client.portfolio.getHoldings({ portfolioKey: k });
+  const markets = [...new Set(res.Positions.Items.map((p) => p.Market))].sort();
+  const options = ['All markets', ...markets];
+  options.forEach((m, i) => {
+    const mark = (i === 0 ? ctx.marketFilter === null : ctx.marketFilter === m) ? '★' : ' ';
+    console.log(` ${mark} [${i + 1}] ${m}`);
+  });
+  const raw = await ask(`pick market [1-${options.length}]: `);
+  const idx = parseInt(raw, 10) - 1;
+  if (idx === 0) {
+    ctx.marketFilter = null;
+    console.log('market filter cleared (all)');
+  } else if (idx > 0 && idx < options.length) {
+    ctx.marketFilter = options[idx];
+    console.log(`market filter set to ${ctx.marketFilter}`);
   }
 }
 
@@ -574,7 +633,7 @@ async function main() {
   }
 
   const snap = client.toSnapshot();
-  const ctx  = { accounts: null, activePortfolioKey: null, profile: null, currencyId: null };
+  const ctx  = { accounts: null, activePortfolioKey: null, profile: null, currencyId: null, marketFilter: null };
 
   try {
     ctx.profile = await client.profile.get();
