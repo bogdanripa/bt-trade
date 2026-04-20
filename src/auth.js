@@ -280,12 +280,15 @@ export function normalizeOtp(typed, prefix) {
  * Multi-account safe: many clients can share a single topic because the
  * provider filters by `username`. Messages for other users are ignored.
  *
- * Expected message body (JSON, recommended):
- *   {"username":"M101021BR","code":"12345"}
+ * Accepted message shapes (tried in this order):
  *
- * Also accepted (plain text, as a fallback):
- *   M101021BR:12345
- *   M101021BR 12345
+ *  1. The raw SMS body forwarded verbatim by an iOS/Android automation.
+ *     The provider searches it for `<prefix>-<digits>` using the `prefix`
+ *     returned by step 1 of the login (e.g. "25"), so a message like
+ *     "Codul ... BT Trade este 25-74456 ..." yields code `74456`.
+ *  2. JSON: {"username":"MYUSER","code":"12345"}
+ *  3. Plain "username:code" or "username code"
+ *  4. Bare 4–8 digit string
  *
  * @param {object} [opts]
  * @param {string} [opts.topic]           - ntfy topic (your stable URL slug). If omitted, a
@@ -301,10 +304,10 @@ export function normalizeOtp(typed, prefix) {
 export function ntfyOtpProvider(opts = {}) {
   const { topic: explicitTopic, server = 'https://ntfy.sh', timeoutMs = 5 * 60 * 1000, since = '30s', log = () => {} } = opts;
 
-  return async ({ username, details }) => {
+  return async ({ username, prefix, details }) => {
     const topic = explicitTopic || defaultNtfyTopic(username);
     process.stderr.write(`\n[2FA] ${details}\n`);
-    process.stderr.write(`      Waiting for OTP on ${server}/${topic} (user: ${username}) …\n`);
+    process.stderr.write(`      Waiting for OTP on ${server}/${topic} (user: ${username}, prefix: ${prefix || '—'}) …\n`);
     if (!explicitTopic) {
       process.stderr.write(`      (default topic derived from username; hardcode this URL in your phone shortcut)\n`);
     }
@@ -337,7 +340,7 @@ export function ntfyOtpProvider(opts = {}) {
           try { envelope = JSON.parse(line); } catch { continue; }
           if (envelope.event !== 'message') continue;   // skip 'open' / 'keepalive'
 
-          const { user: msgUser, code } = parseNtfyBody(envelope.message);
+          const { user: msgUser, code } = parseNtfyBody(envelope.message, prefix);
           if (msgUser && msgUser !== username) {
             log('ntfy:skipped', { reason: 'username-mismatch', msgUser });
             continue;
@@ -369,12 +372,24 @@ export function defaultNtfyTopic(username) {
   return `bt-trade-otp-${hex}`;
 }
 
-/** Parse ntfy message body to extract { user, code }. Tolerant of several shapes. */
-function parseNtfyBody(raw) {
+/**
+ * Parse an ntfy message body to extract { user, code }. Tolerant of several shapes.
+ * When a `prefix` is provided, the parser prefers a `<prefix>-<digits>` match so
+ * that raw SMS bodies forwarded by phone automations can be used directly.
+ */
+function parseNtfyBody(raw, prefix) {
   if (!raw || typeof raw !== 'string') return { user: null, code: null };
   const s = raw.trim();
 
-  // 1) JSON object with username + code
+  // 1) Raw SMS body containing `<prefix>-<digits>` (e.g. "... BT Trade este 25-74456 ...").
+  //    Highest priority because it's the zero-typing iOS/Android flow.
+  if (prefix) {
+    const re = new RegExp(escapeRegex(String(prefix)) + '-(\\d{3,8})\\b');
+    const hit = s.match(re);
+    if (hit) return { user: null, code: hit[1] };
+  }
+
+  // 2) JSON object with username + code (legacy shortcut design or programmatic posts)
   try {
     const obj = JSON.parse(s);
     if (obj && typeof obj === 'object') {
@@ -384,15 +399,19 @@ function parseNtfyBody(raw) {
     }
   } catch (_) { /* fall through */ }
 
-  // 2) "username:code" or "username code"
+  // 3) "username:code" or "username code"
   const m = s.match(/^([A-Za-z0-9_.\-]+)[\s:]+(\d{4,8})\b/);
   if (m) return { user: m[1], code: m[2] };
 
-  // 3) Bare digits — no username filter possible
+  // 4) Bare digits
   const digits = s.replace(/\D/g, '');
   if (digits.length >= 4 && digits.length <= 8) return { user: null, code: digits };
 
   return { user: null, code: null };
+}
+
+function escapeRegex(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 /** Interactive OTP provider for CLI use. Prompts on stdin/stdout. */

@@ -31,3 +31,4 @@ yarn-error.log*
 # Coverage
 coverage/
 .nyc_output/
+*.bak

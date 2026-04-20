@@ -175,7 +175,7 @@ Compute it ahead of time so you know what URL to put in the shortcut:
 
 ```js
 import { defaultNtfyTopic } from '@bogdanripa/bt-trade';
-console.log(defaultNtfyTopic('M101021BR'));
+console.log(defaultNtfyTopic('MYUSER'));
 // → bt-trade-otp-a1b2c3d4e5f60718
 // → URL: https://ntfy.sh/bt-trade-otp-a1b2c3d4e5f60718
 ```
@@ -191,44 +191,41 @@ ntfyOtpProvider({ topic: 'bt-trade-' + crypto.randomUUID() })
 > generally fine for personal use. If you want defense in depth, use an
 > explicit random topic and treat it like a password.
 
-#### 2. Build the iOS Shortcut (Apple)
+#### 2. Build the iOS automation (Apple)
 
-1. Open the **Shortcuts** app → tap **+** to create a new shortcut.
-2. Add the following actions in order:
-   1. **Ask for Input** — Question: `BT Trade username`. Default Answer: your username (e.g. `M101021BR`). Allow editing so you can switch when running multiple accounts.
-   2. **Ask for Input** — Question: `OTP code`. Input Type: `Number`.
-   3. **Dictionary** — add two key/value entries:
-      - `username` ← *Provided Input* from action 1
-      - `code` ← *Provided Input* from action 2
-   4. **Get Contents of URL** —
-      - URL: `https://ntfy.sh/<your-topic>` (replace with the topic from step 1)
-      - Method: `POST`
-      - Request Body: `JSON`, value = the *Dictionary* from action 3
-   5. **Show Notification** — Body: `Sent OTP for [Provided Input]`.
-3. Name the shortcut `BT Trade OTP` and **Add to Home Screen** (or pin to the lock-screen widget).
+Zero typing — triggered automatically when the BT Trade SMS arrives. The
+automation just forwards the entire SMS body to ntfy. The Node side picks the
+5-digit code out of the body using the prefix the server returned in step 1
+(e.g. `25-74456` → `74456`).
 
-When the BT Trade SMS arrives, tap the shortcut → enter the code → it's
-forwarded to ntfy.sh → your Node script picks it up.
+1. Open **Shortcuts** → **Automation** tab → **+** → **New Automation**.
+2. Choose **Message** as the trigger.
+   - **Sender**: `BT Trade` (or whatever your BT Trade sender ID shows — usually a shortcode / alphanumeric sender, not a phone number).
+   - **Message**: leave blank (all messages from that sender).
+   - Turn **Run Immediately** on so it fires without a confirmation tap (iOS 18+).
+3. Add a single action: **Get Contents of URL**.
+   - **URL**: `https://ntfy.sh/<your-topic>` — the URL from step 1 above.
+   - **Method**: `POST`.
+   - **Request Body**: `Text` — expand the variable picker and insert the **SMS Content** / **Message** magic variable as the entire body.
+4. Save.
 
-> **Auto-fill the OTP from the SMS:** instead of typing it, replace action 2
-> with `Get Latest Messages` (filter sender to `BTTRADE` / your bank's sender
-> ID) → `Match Text` with regex `\b\d{5}\b` to extract the 5 digits.
+That's it. When the BT Trade SMS lands, the automation POSTs the full text
+(`"Codul tau de autentificare BT Trade este 25-74456..."`) to your ntfy
+topic. The Node `ntfyOtpProvider` sees the message, matches `25-(\d+)` using
+the prefix from step 1, and returns the 5 digits.
 
-> **Auto-trigger:** in iOS Shortcuts → Automation → "When I receive a message
-> from BTTRADE" → "Run Shortcut: BT Trade OTP". Apple still requires a one-tap
-> confirmation on Messages-triggered automations for privacy reasons, but it
-> reduces the manual effort to a single tap on the notification.
+> The sender-ID filter is what keeps random SMS (2-factor codes from other
+> services, marketing messages) from accidentally hitting the ntfy topic.
 
 #### 3. Build the Android equivalent (any of these works)
 
-- **Tasker** with the *Received Text* event filtered on the BT sender, then a
-  *HTTP Request* action POSTing the dictionary to your topic.
-- **MacroDroid** — *SMS Received* trigger → *Regex Match* → *HTTP Request*.
-- A purpose-built app like **SMS-to-URL Forwarder** with a regex template.
+- **Tasker** — *Received Text* event filtered on the BT Trade sender → *HTTP Request* action, body = `%SMSRB` (the SMS body variable).
+- **MacroDroid** — *SMS Received* trigger with a sender filter → *HTTP Request* with body = `[sms_message]`.
+- **SMS Forwarder** apps — most have a "forward matching SMS to URL" template.
 
-The body the shortcut sends is just JSON; any tool that can do an HTTP POST
-will do. Plain-text formats also work (`username:code` or just `code`) — the
-provider parses all three.
+The point is: forward the **raw SMS body**. Don't pre-extract the code; the
+Node provider does that, using the prefix the server returned. This keeps the
+phone side trivial and tolerant of wording changes in the SMS.
 
 #### 4. Use it from Node
 
@@ -239,7 +236,7 @@ const client = new BTTradeClient({
   otpProvider: ntfyOtpProvider({ /* topic: optional */ }),
 });
 
-await client.login({ username: 'M101021BR', password: process.env.BT_PASS });
+await client.login({ username: 'MYUSER', password: process.env.BT_PASS });
 // ...your normal calls...
 ```
 

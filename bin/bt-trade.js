@@ -8,7 +8,7 @@
  *
  * Run:
  *   node bin/bt-trade.js
- *   BT_USER=M101021BR BT_PASS='...' node bin/bt-trade.js
+ *   BT_USER=MYUSER BT_PASS='...' node bin/bt-trade.js
  *   node bin/bt-trade.js --debug
  */
 
