@@ -300,13 +300,15 @@ async function doOrderPreview(client, ctx) {
   const symbol = (await ask('Symbol (e.g. TVBETETF): ')).toUpperCase().trim();
   if (!symbol) return;
 
-  // Let user pick market from the live list.
-  const markets = await client.markets.list();
+  // Let user pick market from the live list (sorted alphabetically).
+  const markets = (await client.markets.list()).slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
   markets.forEach((m, i) => console.log(`  [${i + 1}] ${m.name || m.code || '?'}  (id=${m.id})`));
-  const mRaw = await ask(`Market [1-${markets.length}]: `);
-  const mIdx = parseInt(mRaw, 10) - 1;
-  if (mIdx < 0 || mIdx >= markets.length) { console.log('  invalid selection'); return; }
-  const marketId = markets[mIdx].id;
+  const mRaw = (await ask(`Market — list number or id: `)).trim();
+  const mNum = parseInt(mRaw, 10);
+  // Accept either list index (1-based) or raw market id.
+  let market = markets.find((m) => m.id === mNum) ?? markets[mNum - 1];
+  if (!market) { console.log('  invalid selection'); return; }
+  const marketId = market.id;
 
   const sideRaw = await ask('Side [1=buy / 2=sell]: ');
   const side = sideRaw.trim() === '2' ? 'sell' : 'buy';
