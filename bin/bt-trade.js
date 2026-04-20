@@ -549,13 +549,17 @@ async function main() {
   let usedSaved = false;
 
   if (saved) {
+    const tokenStillValid = saved.expiresAt && Date.now() < saved.expiresAt - 30_000;
     console.log(`Saved session found for ${saved.username}`);
-    console.log(`  (access token expired ${accessAge(saved.expiresAt)}; refresh token will be validated)`);
+    console.log(`  (access token ${accessAge(saved.expiresAt)})`);
     const choice = (await ask('  [1] use saved session   [2] log in fresh   > ')).trim();
     if (choice === '' || choice === '1') {
       try {
         client.restore(saved);
-        await client.auth.refresh();
+        if (!tokenStillValid) {
+          // Access token is expired or near expiry — refresh now so we start with a fresh one.
+          await client.auth.refresh();
+        }
         usedSaved = true;
         console.log('Saved session restored.');
       } catch (e) {
@@ -603,11 +607,11 @@ async function main() {
 }
 
 function accessAge(expiresAt) {
-  if (!expiresAt) return 'unknown';
+  if (!expiresAt) return 'expiry unknown';
   const diff = Date.now() - expiresAt;
-  if (diff < 0) return `in ${Math.round(-diff / 1000)}s`;
+  if (diff < 0) return `valid, expires in ${Math.round(-diff / 1000)}s`;
   const mins = Math.round(diff / 60000);
-  return mins < 60 ? `${mins} min ago` : mins < 1440 ? `${Math.round(mins / 60)}h ago` : `${Math.round(mins / 1440)}d ago`;
+  return `expired ${mins < 60 ? `${mins} min ago` : mins < 1440 ? `${Math.round(mins / 60)}h ago` : `${Math.round(mins / 1440)}d ago`}`;
 }
 
 main().catch((e) => {
