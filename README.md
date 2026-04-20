@@ -206,16 +206,24 @@ automation just forwards the entire SMS body to ntfy. The Node side picks the
 3. Add a single action: **Get Contents of URL**.
    - **URL**: `https://ntfy.sh/<your-topic>` — the URL from step 1 above.
    - **Method**: `POST`.
-   - **Request Body**: `Text` — expand the variable picker and insert the **SMS Content** / **Message** magic variable as the entire body.
+   - **Request Body**: `JSON` (the Shortcuts app only offers JSON / Form /
+     File for POST bodies — Text is not an option).
+   - Add **one key** to the JSON:
+     - Key: `body`
+     - Value: tap the variable picker and insert the **Message** /
+       **SMS Content** magic variable.
 4. Save.
 
-That's it. When the BT Trade SMS lands, the automation POSTs the full text
-(`"Codul tau de autentificare BT Trade este 25-74456..."`) to your ntfy
-topic. The Node `ntfyOtpProvider` sees the message, matches `25-(\d+)` using
-the prefix from step 1, and returns the 5 digits.
+What lands on ntfy is `{"body":"Codul tau de autentificare BT Trade este 25-74456 ..."}`.
+The Node `ntfyOtpProvider` recognizes the wrapper, pulls out the inner text,
+matches `25-(\d+)` using the prefix the server returned in step 1 of the
+login, and returns `74456`.
 
 > The sender-ID filter is what keeps random SMS (2-factor codes from other
 > services, marketing messages) from accidentally hitting the ntfy topic.
+
+> The wrapper key can be any of `body`, `message`, `text`, `sms`, or
+> `content` — pick whichever makes the shortcut readable.
 
 #### 3. Build the Android equivalent (any of these works)
 

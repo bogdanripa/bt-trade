@@ -374,40 +374,65 @@ export function defaultNtfyTopic(username) {
 
 /**
  * Parse an ntfy message body to extract { user, code }. Tolerant of several shapes.
- * When a `prefix` is provided, the parser prefers a `<prefix>-<digits>` match so
- * that raw SMS bodies forwarded by phone automations can be used directly.
+ *
+ * Accepted body shapes (tried in order of specificity):
+ *
+ *   1. Structured JSON with an explicit code:
+ *        {"username":"MYUSER","code":"74456"}
+ *
+ *   2. JSON wrapping the raw SMS (iOS Shortcuts' "Get Contents of URL" action
+ *      only offers JSON / Form / File, so the iOS flow posts something like):
+ *        {"body":"Codul tau BT Trade este 25-74456. Nu il transmite nimanui."}
+ *      — any of `body`, `message`, `text`, `sms`, or `content` is recognized.
+ *      If `prefix` is known, the inner text is searched for `<prefix>-<digits>`.
+ *
+ *   3. Raw text (plain-text SMS forwarding, Android apps, curl) — same
+ *      `<prefix>-<digits>` search runs directly on the message body.
+ *
+ *   4. Plain `username:code` or `username code` shorthand.
+ *
+ *   5. Bare 4–8 digit string.
  */
 function parseNtfyBody(raw, prefix) {
   if (!raw || typeof raw !== 'string') return { user: null, code: null };
   const s = raw.trim();
 
-  // 1) Raw SMS body containing `<prefix>-<digits>` (e.g. "... BT Trade este 25-74456 ...").
-  //    Highest priority because it's the zero-typing iOS/Android flow.
-  if (prefix) {
-    const re = new RegExp(escapeRegex(String(prefix)) + '-(\\d{3,8})\\b');
-    const hit = s.match(re);
-    if (hit) return { user: null, code: hit[1] };
-  }
-
-  // 2) JSON object with username + code (legacy shortcut design or programmatic posts)
+  // If it's JSON, unwrap common shapes — we may extract code directly, or
+  // fall through to regex-on-text with a richer starting string.
+  let text = s;
+  let user = null;
   try {
     const obj = JSON.parse(s);
-    if (obj && typeof obj === 'object') {
-      const user = obj.username || obj.user || null;
-      const code = obj.code ? String(obj.code).replace(/\D/g, '') : null;
-      if (code) return { user, code };
+    if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
+      user = obj.username || obj.user || null;
+      // 1) Explicit code field wins.
+      if (obj.code !== undefined && obj.code !== null) {
+        const code = String(obj.code).replace(/\D/g, '');
+        if (code) return { user, code };
+      }
+      // 2) Wrapped SMS body — replace `text` for the regex pass below.
+      const wrapped = obj.body ?? obj.message ?? obj.text ?? obj.sms ?? obj.content;
+      if (typeof wrapped === 'string' && wrapped.length > 0) text = wrapped;
     }
-  } catch (_) { /* fall through */ }
+  } catch (_) { /* not JSON → text stays as-is */ }
 
-  // 3) "username:code" or "username code"
-  const m = s.match(/^([A-Za-z0-9_.\-]+)[\s:]+(\d{4,8})\b/);
-  if (m) return { user: m[1], code: m[2] };
+  // 3) `<prefix>-<digits>` anywhere in the text.
+  if (prefix) {
+    const re = new RegExp(escapeRegex(String(prefix)) + '-(\\d{3,8})\\b');
+    const hit = text.match(re);
+    if (hit) return { user, code: hit[1] };
+  }
 
-  // 4) Bare digits
-  const digits = s.replace(/\D/g, '');
-  if (digits.length >= 4 && digits.length <= 8) return { user: null, code: digits };
+  // 4) "username:code" or "username code" shorthand (only meaningful if we didn't
+  //    already get a user/text from a JSON wrapper).
+  const m = text.match(/^([A-Za-z0-9_.\-]+)[\s:]+(\d{4,8})\b/);
+  if (m) return { user: user || m[1], code: m[2] };
 
-  return { user: null, code: null };
+  // 5) Bare digits.
+  const digits = text.replace(/\D/g, '');
+  if (digits.length >= 4 && digits.length <= 8) return { user, code: digits };
+
+  return { user, code: null };
 }
 
 function escapeRegex(s) {
