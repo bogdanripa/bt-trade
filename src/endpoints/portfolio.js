@@ -40,6 +40,10 @@ export class PortfolioApi {
    *   `client.reference.listEvaluationCurrencies()` or the user's profile
    *   `selectedPortfolioPanelCurrencyID`.
    */
+  /**
+   * @param {{ portfolioKey: string, currencyId: number|string }} args
+   * @returns {Promise<import('../types.js').BalanceEntry[]>}
+   */
   getBalance({ portfolioKey, currencyId } = {}) {
     if (!portfolioKey) throw new ValidationError('getBalance: portfolioKey required');
     if (currencyId === undefined || currencyId === null || currencyId === '') {
@@ -50,7 +54,11 @@ export class PortfolioApi {
     });
   }
 
-  /** Extended balance info (includes blocked, transferable, evaluated totals). */
+  /**
+   * Extended balance info (includes blocked, transferable, evaluated totals).
+   * @param {{ portfolioKey: string, currencyId: number|string }} args
+   * @returns {Promise<import('../types.js').BalanceInfoSection[]>}
+   */
   getBalanceInfo({ portfolioKey, currencyId } = {}) {
     if (!portfolioKey) throw new ValidationError('getBalanceInfo: portfolioKey required');
     if (currencyId === undefined || currencyId === null || currencyId === '') {
@@ -61,13 +69,21 @@ export class PortfolioApi {
     });
   }
 
-  /** Account-transfer relationships for the portfolio. */
+  /**
+   * Account-transfer relationships for the portfolio.
+   * @param {{ portfolioKey: string }} args
+   * @returns {Promise<import('../types.js').AccountTransfer[]>}
+   */
   getAccountsTransfer({ portfolioKey } = {}) {
     if (!portfolioKey) throw new ValidationError('getAccountsTransfer: portfolioKey required');
     return this.transport.get('/api/api/Portfolio/GetAccountsTransfer', { query: { portfolioKey } });
   }
 
-  /** Linked bank accounts. */
+  /**
+   * Linked bank accounts.
+   * @param {{ portfolioKey: string }} args
+   * @returns {Promise<import('../types.js').BankAccount[]>}
+   */
   getBankAccounts({ portfolioKey } = {}) {
     if (!portfolioKey) throw new ValidationError('getBankAccounts: portfolioKey required');
     return this.transport.get('/api/api/Portfolio/GetBankAccounts', { query: { portfolioKey } });
@@ -81,6 +97,7 @@ export class PortfolioApi {
    * @param {string|Date} [args.endDate]   - DD.MM.YYYY, ISO 'YYYY-MM-DD', or Date.
    *                                          Defaults to today. Sent as DD.MM.YYYY.
    * @param {object} [args.queryModel]     - {fieldKeys, sortKey, sortDirection, page, pageSize}
+   * @returns {Promise<import('../types.js').PortfolioSelectResult>}
    */
   listPositions({ portfolioKey, endDate, queryModel } = {}) {
     if (!portfolioKey) throw new ValidationError('listPositions: portfolioKey required');

@@ -31,6 +31,7 @@ export class AccountsApi {
    *                           the default evaluation currency for this account)
    *   raw                  — the full raw client object from the profile payload
    */
+  /** @returns {Promise<import('../types.js').Account[]>} */
   async list() {
     const profile = await this.profileApi.get();
     const selected = profile.selectedClientID;

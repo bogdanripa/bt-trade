@@ -47,6 +47,9 @@ export class OrdersApi {
    * @param {string|Date} [args.endDate]          - DD.MM.YYYY | 'YYYY-MM-DD' | Date; sent as DD.MM.YYYY
    * @param {object} [args.queryModel]            - defaults to { page: 1, pageSize: 200 }
    */
+  /**
+   * @returns {Promise<import('../types.js').PaginatedResult<import('../types.js').Order>>}
+   */
   search({ portfolioKey, statuses, side, symbol, interval, startDate, endDate, queryModel } = {}) {
     if (!portfolioKey) throw new ValidationError('orders.search: portfolioKey required');
     const qm = { ...(queryModel || {}) };
@@ -68,7 +71,10 @@ export class OrdersApi {
     });
   }
 
-  /** Fetch a single order by order number. */
+  /**
+   * Fetch a single order by order number.
+   * @returns {Promise<import('../types.js').Order>}
+   */
   get(orderNumber) {
     if (!orderNumber) throw new ValidationError('orders.get: orderNumber required');
     return this.transport.get('/api/api/Orders/Get', { query: { orderNumber } });

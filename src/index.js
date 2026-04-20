@@ -22,3 +22,6 @@ export {
   ApiError,
   ValidationError,
 } from './errors.js';
+
+// Response-shape type definitions live in './types.js'.
+// Reference them in JSDoc via: @type {import('bt-trade/src/types.js').TypeName}

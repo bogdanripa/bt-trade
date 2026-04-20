@@ -17,6 +17,7 @@ export class ProfileApi {
    * Fetch the authenticated user's profile.
    * @param {object} [opts]
    * @param {'desktop'|'mobile'} [opts.device='desktop']
+   * @returns {Promise<import('../types.js').UserProfile>}
    */
   get({ device = 'desktop' } = {}) {
     return this.transport.get(PATH, { query: { device } });

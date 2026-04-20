@@ -372,10 +372,13 @@ async function main() {
         usedSaved = true;
         console.log('Saved session restored.');
       } catch (e) {
-        saveSession(null);
-        if (e instanceof BTTradeError) {
+        if (e instanceof AuthError) {
+          saveSession(null);
           console.log(`Saved session no longer valid (${e.code}${e.status ? ' ' + e.status : ''}) — falling back to fresh login.`);
-        } else throw e;
+        } else {
+          // Network or other transient error — session may still be valid; don't wipe it.
+          throw e;
+        }
       }
     } else {
       saveSession(null);

@@ -198,7 +198,7 @@ export class AuthSession {
         }
         this.snapshot.accessToken = r.access_token;
         if (r.refresh_token) this.snapshot.refreshToken = r.refresh_token;
-        if (r.expires_in) this.snapshot.expiresAt = Date.now() + Number(r.expires_in) * 1000;
+        this.snapshot.expiresAt = tokenExpiry(r);
         if (r.SessionId) this.snapshot.sessionId = String(r.SessionId);
         this.log('auth:refreshed', { expiresAt: new Date(this.snapshot.expiresAt).toISOString() });
         await this.#emitChange();
@@ -251,7 +251,7 @@ export class AuthSession {
       username,
       accessToken: tokenResp.access_token,
       refreshToken: tokenResp.refresh_token,
-      expiresAt: Date.now() + (Number(tokenResp.expires_in) || 599) * 1000,
+      expiresAt: tokenExpiry(tokenResp),
       sessionId: tokenResp.SessionId ? String(tokenResp.SessionId) : null,
     };
     this._password = password || null;
@@ -259,6 +259,19 @@ export class AuthSession {
 }
 
 // ---------- helpers ----------
+
+/**
+ * Resolve the access-token expiry from a token response.
+ * Prefers the server's absolute `expiration` ISO string (avoids request-latency
+ * drift); falls back to computing from `expires_in` seconds.
+ */
+function tokenExpiry(r) {
+  if (r.expiration) {
+    const t = new Date(r.expiration).getTime();
+    if (!isNaN(t)) return t;
+  }
+  return Date.now() + (Number(r.expires_in) || 599) * 1000;
+}
 
 /**
  * Strip non-digits and remove the prefix if the user accidentally included it.

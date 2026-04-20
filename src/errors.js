@@ -63,7 +63,8 @@ export function errorFromResponse(status, body, url) {
     (body && typeof body === 'object' && (body.error_description || body.details || body.message))
     || (typeof body === 'string' ? body : `HTTP ${status}`);
   const details = { status, body };
-  if (status === 401 || status === 403) {
+  const isInvalidGrant = body && typeof body === 'object' && body.error === 'invalid_grant';
+  if (status === 401 || status === 403 || isInvalidGrant) {
     return new AuthError(`Auth rejected by ${url}: ${msg}`, details);
   }
   return new ApiError(`${url} failed: ${msg}`, details);
