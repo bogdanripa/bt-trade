@@ -21,12 +21,6 @@ import { BTTradeClient, stdinOtpProvider, ntfyOtpProvider, BTTradeError, AuthErr
 const DEBUG = process.argv.includes('--debug');
 const SESSION_FILE = path.join(os.tmpdir(), 'bt-trade-session.json');
 
-// Selects the OTP provider. Defaults to ntfy.sh (stable, phone-shortcut
-// friendly). The topic is either:
-//   - the value of --ntfy-topic <slug>
-//   - the BT_NTFY_TOPIC env var
-//   - derived deterministically from the username (default)
-// Pass --otp-stdin to fall back to terminal entry.
 function pickOtpMode() {
   if (process.argv.includes('--otp-stdin')) return { mode: 'stdin' };
   const i = process.argv.indexOf('--ntfy-topic');
@@ -49,7 +43,6 @@ function closeRl() { if (_rl) { _rl.close(); _rl = null; } }
 async function ask(q) { return (await rl().question(q)).trim(); }
 
 async function askHidden(q) {
-  // We need raw mode for hidden input, so we fully detach readline for this prompt.
   closeRl();
   process.stdout.write(q);
   let buf = '';
@@ -86,7 +79,70 @@ function warn(label, err) {
     console.error(`  [error] ${label}: ${err.message || err}`);
   }
 }
+
+/** Fallback: pretty-print raw JSON. */
 function dump(x) { console.log(JSON.stringify(x, null, 2)); }
+
+/**
+ * Render an array of objects as an aligned text table.
+ *
+ * @param {object[]} rows
+ * @param {Array<{key:string, label?:string, align?:'left'|'right', max?:number}>} [cols]
+ *   Column specs. Omit to auto-detect from the first row's keys.
+ */
+function table(rows, cols) {
+  if (!Array.isArray(rows) || rows.length === 0) { console.log('  (no rows)'); return; }
+
+  if (!cols) {
+    cols = Object.keys(rows[0]).map((k) => ({ key: k }));
+  }
+
+  const MAX_DEFAULT = 30;
+
+  // Build string cells + measure widths.
+  const headers = cols.map((c) => c.label ?? c.key);
+  const widths  = headers.map((h) => h.length);
+  const cells   = rows.map((row) =>
+    cols.map((c, ci) => {
+      const raw = row[c.key];
+      let s;
+      if (raw === null || raw === undefined) s = '';
+      else if (typeof raw === 'number')      s = raw.toLocaleString('en', { maximumFractionDigits: 4 });
+      else if (typeof raw === 'boolean')     s = raw ? 'yes' : 'no';
+      else if (typeof raw === 'object')      s = JSON.stringify(raw);
+      else                                   s = String(raw);
+      const max = c.max ?? MAX_DEFAULT;
+      if (s.length > max) s = s.slice(0, max - 1) + '…';
+      widths[ci] = Math.max(widths[ci], s.length);
+      return s;
+    })
+  );
+
+  const pad = (s, w, align) =>
+    align === 'right' ? s.padStart(w) : s.padEnd(w);
+
+  const row2str = (rowCells) =>
+    '  ' + rowCells.map((s, i) => pad(s, widths[i], cols[i].align ?? 'left')).join('  ');
+
+  console.log(row2str(headers));
+  console.log('  ' + widths.map((w) => '─'.repeat(w)).join('  '));
+  cells.forEach((r) => console.log(row2str(r)));
+  console.log(`  (${rows.length} row${rows.length !== 1 ? 's' : ''})`);
+}
+
+/** Print a single object as aligned key: value lines. */
+function kv(obj, keys) {
+  const entries = keys
+    ? keys.map((k) => [k, obj[k]])
+    : Object.entries(obj);
+  const maxLen = Math.max(...entries.map(([k]) => k.length));
+  entries.forEach(([k, v]) => {
+    const val = v === null || v === undefined ? '—'
+      : typeof v === 'object' ? JSON.stringify(v)
+      : String(v);
+    console.log('  ' + k.padEnd(maxLen) + '  ' + val);
+  });
+}
 
 // ---------- menus ----------
 
@@ -110,7 +166,7 @@ async function menu(title, items) {
 function mainMenu(client, ctx) {
   return menu('MAIN MENU', [
     { label: 'View profile',             run: () => doProfile(client) },
-    { label: 'View markets (exchanges)', run: async () => { heading('Exchanges'); dump(await client.markets.listExchanges()); } },
+    { label: 'View markets (exchanges)', run: () => doExchanges(client) },
     { label: 'View accounts',            run: () => doAccounts(client, ctx) },
     { label: 'Portfolio...',             run: () => portfolioMenu(client, ctx) },
     { label: 'Orders...',                run: () => ordersMenu(client, ctx) },
@@ -122,45 +178,183 @@ function mainMenu(client, ctx) {
 }
 
 function referenceMenu(client) {
+  const ref = (label, fn) => ({
+    label,
+    run: async () => {
+      heading(label);
+      const rows = await fn();
+      table(rows, [
+        { key: 'id',          label: 'ID',          align: 'right', max: 10 },
+        { key: 'key',         label: 'Key',         max: 20 },
+        { key: 'name',        label: 'Name',        max: 30 },
+        { key: 'description', label: 'Description', max: 40 },
+      ].filter((c) => rows[0] && c.key in rows[0]));
+    },
+  });
+
   return menu('REFERENCE DATA', [
-    { label: 'Currencies',                run: async () => { heading('Currencies');          dump(await client.reference.listCurrencies()); } },
-    { label: 'Evaluation currencies',     run: async () => { heading('Evaluation cur.');     dump(await client.reference.listEvaluationCurrencies()); } },
-    { label: 'Account types',             run: async () => { heading('Account types');      dump(await client.reference.listAccountTypes()); } },
-    { label: 'Order statuses',            run: async () => { heading('Order statuses');     dump(await client.reference.listOrderStatuses()); } },
-    { label: 'Trade operations',          run: async () => { heading('Trade operations');    dump(await client.reference.listTradeOperations()); } },
-    { label: 'Trade types',               run: async () => { heading('Trade types');         dump(await client.reference.listTradeTypes()); } },
-    { label: 'Portfolio intervals',       run: async () => { heading('Portfolio intervals'); dump(await client.reference.listPortfolioIntervals()); } },
-    { label: 'Go back',                   back: true },
+    ref('Currencies',            () => client.reference.listCurrencies()),
+    ref('Evaluation currencies', () => client.reference.listEvaluationCurrencies()),
+    ref('Account types',         () => client.reference.listAccountTypes()),
+    ref('Order statuses',        () => client.reference.listOrderStatuses()),
+    ref('Trade operations',      () => client.reference.listTradeOperations()),
+    ref('Trade types',           () => client.reference.listTradeTypes()),
+    ref('Portfolio intervals',   () => client.reference.listPortfolioIntervals()),
+    { label: 'Go back', back: true },
   ]);
 }
 
 function portfolioMenu(client, ctx) {
   return menu('PORTFOLIO', [
-    { label: 'Balance',                   run: async () => { const k = await ensurePortfolio(client, ctx); const c = await ensureCurrency(client, ctx); heading('Balance');      dump(await client.portfolio.getBalance({ portfolioKey: k, currencyId: c })); } },
-    { label: 'Balance info',              run: async () => { const k = await ensurePortfolio(client, ctx); const c = await ensureCurrency(client, ctx); heading('Balance info'); dump(await client.portfolio.getBalanceInfo({ portfolioKey: k, currencyId: c })); } },
-    { label: 'Positions (snapshot)',      run: async () => { const k = await ensurePortfolio(client, ctx); heading('Positions');            dump(await client.portfolio.listPositions({ portfolioKey: k })); } },
-    { label: 'Bank accounts',             run: async () => { const k = await ensurePortfolio(client, ctx); heading('Bank accounts');        dump(await client.portfolio.getBankAccounts({ portfolioKey: k })); } },
-    { label: 'Account transfers',         run: async () => { const k = await ensurePortfolio(client, ctx); heading('Account transfers');    dump(await client.portfolio.getAccountsTransfer({ portfolioKey: k })); } },
-    { label: 'Switch active account',     run: async () => { await chooseAccount(client, ctx); } },
-    { label: 'Switch evaluation currency',run: async () => { await chooseCurrency(client, ctx); } },
-    { label: 'Go back',                   back: true },
+    {
+      label: 'Balance',
+      run: async () => {
+        const k = await ensurePortfolio(client, ctx);
+        const c = await ensureCurrency(client, ctx);
+        heading('Balance');
+        table(await client.portfolio.getBalance({ portfolioKey: k, currencyId: c }), [
+          { key: 'title', label: 'Title', max: 35 },
+          { key: 'value', label: 'Value', align: 'right' },
+          { key: 'highlightText', label: 'Note', max: 20 },
+        ]);
+      },
+    },
+    {
+      label: 'Balance info',
+      run: async () => {
+        const k = await ensurePortfolio(client, ctx);
+        const c = await ensureCurrency(client, ctx);
+        heading('Balance info');
+        const sections = await client.portfolio.getBalanceInfo({ portfolioKey: k, currencyId: c });
+        for (const sec of sections) {
+          console.log('\n  ' + sec.title);
+          table(sec.balances, [
+            { key: 'title',           label: 'Item',  max: 35 },
+            { key: 'highlightText',   label: 'Note',  max: 20 },
+          ]);
+        }
+      },
+    },
+    {
+      label: 'Positions (snapshot)',
+      run: async () => {
+        const k = await ensurePortfolio(client, ctx);
+        heading('Positions');
+        const res = await client.portfolio.listPositions({ portfolioKey: k });
+        table(res.Positions.Items, [
+          { key: 'Code',             label: 'Symbol',      max: 10 },
+          { key: 'Market',           label: 'Market',      max: 8  },
+          { key: 'SecurityBalance',  label: 'Qty',         align: 'right' },
+          { key: 'AvgPrice',         label: 'Avg Price',   align: 'right' },
+          { key: 'LineEvaluation',   label: 'Value',       align: 'right' },
+          { key: 'GainLoss',         label: 'Gain/Loss',   align: 'right' },
+          { key: 'PriceVariation',   label: 'Chg %',       align: 'right' },
+        ]);
+        console.log('\n  Total positions: ' + res.Positions.TotalItemCount);
+      },
+    },
+    {
+      label: 'Bank accounts',
+      run: async () => {
+        const k = await ensurePortfolio(client, ctx);
+        heading('Bank accounts');
+        table(await client.portfolio.getBankAccounts({ portfolioKey: k }), [
+          { key: 'accountNumber', label: 'Account',  max: 25 },
+          { key: 'bank',          label: 'Bank',     max: 20 },
+          { key: 'currency',      label: 'Currency', max: 6  },
+          { key: 'country',       label: 'Country',  max: 10 },
+          { key: 'status',        label: 'Status',   max: 12 },
+        ]);
+      },
+    },
+    {
+      label: 'Account transfers',
+      run: async () => {
+        const k = await ensurePortfolio(client, ctx);
+        heading('Account transfers');
+        table(await client.portfolio.getAccountsTransfer({ portfolioKey: k }), [
+          { key: 'title',             label: 'Account',    max: 30 },
+          { key: 'currency',          label: 'Currency',   max: 6  },
+          { key: 'balance',           label: 'Balance',    align: 'right' },
+          { key: 'availableTransfer', label: 'Available',  align: 'right' },
+        ]);
+      },
+    },
+    { label: 'Switch active account',      run: async () => { await chooseAccount(client, ctx); } },
+    { label: 'Switch evaluation currency', run: async () => { await chooseCurrency(client, ctx); } },
+    { label: 'Go back', back: true },
   ]);
 }
 
 function ordersMenu(client, ctx) {
+  const ORDER_COLS = [
+    { key: 'OrderNumberDisplay', label: 'Order #',   max: 14 },
+    { key: 'DateShort',          label: 'Date',      max: 12 },
+    { key: 'Code',               label: 'Symbol',    max: 10 },
+    { key: 'SideDisplay',        label: 'Side',      max: 6  },
+    { key: 'TypeDisplay',        label: 'Type',      max: 10 },
+    { key: 'Quantity',           label: 'Qty',       align: 'right' },
+    { key: 'FilledQuantity',     label: 'Filled',    align: 'right' },
+    { key: 'PriceDisplay',       label: 'Price',     max: 14 },
+  ];
+
   return menu('ORDERS', [
-    { label: 'Search (all)',              run: async () => { const k = await ensurePortfolio(client, ctx); heading('Orders (all)');       dump(await client.orders.search({ portfolioKey: k })); } },
-    { label: 'Search by date range',      run: async () => {
+    {
+      label: 'Search (all)',
+      run: async () => {
         const k = await ensurePortfolio(client, ctx);
+        heading('Orders (all)');
+        const res = await client.orders.search({ portfolioKey: k });
+        table(res.Items, ORDER_COLS);
+        console.log('  Total: ' + res.TotalItemCount);
+      },
+    },
+    {
+      label: 'Search by date range',
+      run: async () => {
+        const k         = await ensurePortfolio(client, ctx);
         const startDate = await ask('start date YYYY-MM-DD (blank = none): ');
         const endDate   = await ask('end date   YYYY-MM-DD (blank = today): ');
         heading('Orders filtered');
-        dump(await client.orders.search({ portfolioKey: k, startDate: startDate || null, endDate: endDate || null }));
-      } },
-    { label: 'Get one order',             run: async () => { const n = await ask('orderNumber: '); heading('Order ' + n); dump(await client.orders.get(n)); } },
-    { label: 'Get order actions',         run: async () => { const n = await ask('orderNumber: '); heading('Actions ' + n); dump(await client.orders.getActions(n)); } },
-    { label: 'Get order history',         run: async () => { const n = await ask('orderNumber: '); heading('History ' + n); dump(await client.orders.getHistory(n)); } },
-    { label: 'Go back',                   back: true },
+        const res = await client.orders.search({
+          portfolioKey: k,
+          startDate: startDate || null,
+          endDate:   endDate   || null,
+        });
+        table(res.Items, ORDER_COLS);
+        console.log('  Total: ' + res.TotalItemCount);
+      },
+    },
+    {
+      label: 'Get one order',
+      run: async () => {
+        const n = await ask('orderNumber: ');
+        heading('Order ' + n);
+        const o = await client.orders.get(n);
+        kv(o, ['OrderNumberDisplay','DateShort','Code','SideDisplay','TypeDisplay',
+                'Quantity','FilledQuantity','RemainingQuantity','PriceDisplay',
+                'ValabilityDisplay','ValidUntil','PortfolioKey']);
+      },
+    },
+    {
+      label: 'Get order actions',
+      run: async () => {
+        const n = await ask('orderNumber: ');
+        heading('Actions ' + n);
+        const res = await client.orders.getActions(n);
+        Array.isArray(res) ? table(res) : dump(res);
+      },
+    },
+    {
+      label: 'Get order history',
+      run: async () => {
+        const n = await ask('orderNumber: ');
+        heading('History ' + n);
+        const res = await client.orders.getHistory(n);
+        Array.isArray(res) ? table(res) : dump(res);
+      },
+    },
+    { label: 'Go back', back: true },
   ]);
 }
 
@@ -169,14 +363,22 @@ function ordersMenu(client, ctx) {
 async function doProfile(client) {
   heading('Profile');
   const p = await client.profile.get();
-  console.log('Display name :', p.displayName);
-  console.log('User ID      :', p.userID || p.id);
-  console.log('Language     :', p.language);
-  console.log('Theme        :', p.theme);
-  console.log('Last login   :', p.lastLogin);
-  console.log('Server time  :', p.serverTime);
-  console.log('Landing page :', p.landingPage);
-  console.log(`Clients      : ${p.clients ? p.clients.length : 0}`);
+  kv(p, ['displayName','userID','language','theme','lastLogin','serverTime','landingPage']);
+  console.log(`  clients        ${p.clients ? p.clients.length : 0}`);
+}
+
+async function doExchanges(client) {
+  heading('Exchanges');
+  const rows = await client.markets.listExchanges();
+  if (!Array.isArray(rows) || !rows.length) { dump(rows); return; }
+  const keys = Object.keys(rows[0]);
+  const cols = [
+    { key: 'id',   label: 'ID',   align: 'right', max: 8 },
+    { key: 'name', label: 'Name', max: 30 },
+    { key: 'code', label: 'Code', max: 10 },
+  ].filter((c) => keys.includes(c.key));
+  if (cols.length < 2) table(rows);
+  else table(rows, cols);
 }
 
 async function doAccounts(client, ctx) {
@@ -184,7 +386,7 @@ async function doAccounts(client, ctx) {
   const accounts = await client.accounts.list();
   ctx.accounts = accounts;
   accounts.forEach((a, i) => {
-    const star = a.selected ? '★' : ' ';
+    const star   = a.selected ? '★' : ' ';
     const active = ctx.activePortfolioKey === a.portfolioKey ? ' (active)' : '';
     console.log(` ${star} [${i + 1}] ${a.displayName || '(no name)'}  —  ${a.relation || ''}${active}`);
     console.log(`       id=${a.id}`);
@@ -214,22 +416,13 @@ async function ensurePortfolio(client, ctx) {
   return ctx.activePortfolioKey;
 }
 
-/**
- * Balances need a currency for evaluation. Each portfolio carries its own
- * supported `currencies[]` (the web app picks `portfolios[0].currencies[0].id`).
- * If the user has explicitly chosen one for this session, use that instead.
- */
 async function ensureCurrency(client, ctx) {
   if (ctx.currencyId) return ctx.currencyId;
   if (!ctx.accounts) await doAccounts(client, ctx);
   const active = ctx.accounts.find((a) => a.portfolioKey === ctx.activePortfolioKey)
     || ctx.accounts.find((a) => a.selected) || ctx.accounts[0];
   const id = client.accounts.defaultCurrencyId(active);
-  if (id != null) {
-    ctx.currencyId = id;
-    return id;
-  }
-  // Last resort: ask the user from the global evaluation list.
+  if (id != null) { ctx.currencyId = id; return id; }
   console.log('No portfolio-specific currency found for the active account.');
   await chooseCurrency(client, ctx);
   if (!ctx.currencyId) throw new Error('cannot determine a currencyId');
@@ -237,17 +430,12 @@ async function ensureCurrency(client, ctx) {
 }
 
 async function chooseCurrency(client, ctx) {
-  // Prefer the currencies the ACTIVE portfolio actually supports — picking
-  // from the global list often yields 422 ("not available on this portfolio").
   if (!ctx.accounts) await doAccounts(client, ctx);
   const active = ctx.accounts.find((a) => a.portfolioKey === ctx.activePortfolioKey)
     || ctx.accounts.find((a) => a.selected) || ctx.accounts[0];
-  let list = (active && active.portfolios && active.portfolios[0] && active.portfolios[0].currencies) || [];
+  let list   = (active && active.portfolios && active.portfolios[0] && active.portfolios[0].currencies) || [];
   let source = "active portfolio's currencies";
-  if (!list.length) {
-    list = await client.reference.listEvaluationCurrencies();
-    source = 'evaluation currencies (global)';
-  }
+  if (!list.length) { list = await client.reference.listEvaluationCurrencies(); source = 'evaluation currencies (global)'; }
   if (!Array.isArray(list) || !list.length) { console.log('no currencies available'); return; }
   console.log(`From: ${source}`);
   list.forEach((c, i) => {
@@ -262,18 +450,11 @@ async function chooseCurrency(client, ctx) {
   }
 }
 
-/**
- * "RIPA BOGDAN-CONSTANTIN" -> "Bogdan Ripa"
- *
- * Romanian civil register lists surname first. We take the first given name
- * (ignoring hyphenated second names), title-case it, and pair it with the
- * surname. Returns '' on anything unexpected.
- */
 function formatRomanianName(raw) {
   if (!raw || typeof raw !== 'string') return '';
   const tokens = raw.trim().split(/\s+/).filter(Boolean);
   if (tokens.length < 2) return tokens.length === 1 ? titleCase(tokens[0]) : '';
-  const surname = tokens[0];
+  const surname    = tokens[0];
   const firstGiven = tokens.slice(1).join(' ').split('-')[0];
   return `${titleCase(firstGiven)} ${titleCase(surname)}`;
 }
@@ -285,10 +466,10 @@ function titleCase(s) {
 async function doRefresh(client) {
   heading('Refreshing access token');
 
-  const before = client.toSnapshot();
+  const before        = client.toSnapshot();
   const oldRefreshTail = before?.refreshToken ? before.refreshToken.slice(-8) : '(none)';
   const oldAccessTail  = before?.accessToken  ? before.accessToken.slice(-8)  : '(none)';
-  const oldExp         = before?.expiresAt ? new Date(before.expiresAt).toISOString() : '(unknown)';
+  const oldExp         = before?.expiresAt    ? new Date(before.expiresAt).toISOString() : '(unknown)';
 
   console.log('Before:');
   console.log('  access_token  fingerprint:', oldAccessTail);
@@ -297,28 +478,27 @@ async function doRefresh(client) {
 
   await client.auth.refresh();
 
-  const after = client.toSnapshot();
+  const after         = client.toSnapshot();
   const newRefreshTail = after?.refreshToken ? after.refreshToken.slice(-8) : '(none)';
   const newAccessTail  = after?.accessToken  ? after.accessToken.slice(-8)  : '(none)';
-  const newExp         = after?.expiresAt ? new Date(after.expiresAt).toISOString() : '(unknown)';
+  const newExp         = after?.expiresAt    ? new Date(after.expiresAt).toISOString() : '(unknown)';
   const rotated        = oldRefreshTail !== newRefreshTail;
   const accessRotated  = oldAccessTail  !== newAccessTail;
 
   console.log('\nAfter:');
   console.log('  access_token  fingerprint:', newAccessTail,  accessRotated ? '(ROTATED)' : '(unchanged)');
-  console.log('  refresh_token fingerprint:', newRefreshTail, rotated ? '(ROTATED — server returned a new one)' : '(UNCHANGED — server reused same one, so single-use is unlikely)');
+  console.log('  refresh_token fingerprint:', newRefreshTail, rotated ? '(ROTATED)' : '(UNCHANGED)');
   console.log('  access expires:           ', newExp);
 
   if (accessRotated && !rotated) {
-    console.log('\nDiagnostic: refresh-token appears NOT to rotate. Single-use refresh tokens are unlikely to be the cause of a later invalid_grant.');
+    console.log('\nDiagnostic: refresh-token appears NOT to rotate.');
   } else if (rotated) {
-    console.log('\nDiagnostic: refresh-token was rotated. If you run a second Refresh immediately and it fails with invalid_grant, rotation is the cause and this CLI is saving the new one correctly.');
+    console.log('\nDiagnostic: refresh-token was rotated.');
   }
 }
 
 // ---------- main ----------
 
-// Session persistence adapter — CLI-only, module stays filesystem-free.
 function loadSavedSession() {
   try {
     if (!fs.existsSync(SESSION_FILE)) return null;
@@ -355,7 +535,7 @@ async function main() {
       ? ntfyOtpProvider({ topic: otpMode.topic || undefined, log })
       : stdinOtpProvider(),
     log,
-    onSessionChange: saveSession,   // persists after login / refresh / logout
+    onSessionChange: saveSession,
   });
 
   const saved = loadSavedSession();
@@ -368,7 +548,7 @@ async function main() {
     if (choice === '' || choice === '1') {
       try {
         client.restore(saved);
-        await client.auth.refresh();     // proves the refresh_token still works
+        await client.auth.refresh();
         usedSaved = true;
         console.log('Saved session restored.');
       } catch (e) {
@@ -376,7 +556,6 @@ async function main() {
           saveSession(null);
           console.log(`Saved session no longer valid (${e.code}${e.status ? ' ' + e.status : ''}) — falling back to fresh login.`);
         } else {
-          // Network or other transient error — session may still be valid; don't wipe it.
           throw e;
         }
       }
@@ -394,15 +573,14 @@ async function main() {
   }
 
   const snap = client.toSnapshot();
-  const ctx = { accounts: null, activePortfolioKey: null, profile: null, currencyId: null };
+  const ctx  = { accounts: null, activePortfolioKey: null, profile: null, currencyId: null };
 
-  // Friendly greeting — real name lives in profile.clients[0].displayName.
   try {
     ctx.profile = await client.profile.get();
-    const raw = ctx.profile?.clients?.[0]?.displayName || '';
+    const raw      = ctx.profile?.clients?.[0]?.displayName || '';
     const friendly = formatRomanianName(raw);
     if (friendly) console.log(`\nHi there, ${friendly}! 👋`);
-  } catch (_) { /* greeting never blocks */ }
+  } catch (_) {}
 
   console.log(`Token expires in ~${Math.round((snap.expiresAt - Date.now()) / 1000)}s.`);
   const outcome = await mainMenu(client, ctx);
@@ -422,7 +600,7 @@ function accessAge(expiresAt) {
   const diff = Date.now() - expiresAt;
   if (diff < 0) return `in ${Math.round(-diff / 1000)}s`;
   const mins = Math.round(diff / 60000);
-  return mins < 60 ? `${mins} min ago` : mins < 1440 ? `${Math.round(mins/60)}h ago` : `${Math.round(mins/1440)}d ago`;
+  return mins < 60 ? `${mins} min ago` : mins < 1440 ? `${Math.round(mins / 60)}h ago` : `${Math.round(mins / 1440)}d ago`;
 }
 
 main().catch((e) => {
