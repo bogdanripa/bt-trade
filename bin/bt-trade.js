@@ -615,8 +615,6 @@ async function main() {
     console.log('OTP delivery: terminal (stdin)');
   }
 
-  if (DEMO) console.log('Mode: DEMO (paper trading)\n');
-
   const client = new BTTradeClient({
     demo: DEMO,
     otpProvider: otpMode.mode === 'ntfy'
