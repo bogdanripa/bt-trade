@@ -321,7 +321,7 @@ async function doOrderPreview(client, ctx) {
     price = pr.trim() || undefined;
   }
 
-  const qtyRaw = await ask('Quantity (blank to skip): ');
+  const qtyRaw = await ask('Quantity: ');
   const quantity = qtyRaw.trim() || null;
 
   const r = await client.orders.preview({ portfolioKey: k, symbol, marketId, quantity, price, side, type });
