@@ -12,7 +12,7 @@ export class MarketsApi {
   constructor(transport) { this.transport = transport; }
 
   /** List of exchanges (markets) available for trading. */
-  listExchanges() {
+  list() {
     return this.transport.get('/api/api/Nomenclatures/GetExchanges');
   }
 }

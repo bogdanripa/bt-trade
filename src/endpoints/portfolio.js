@@ -39,15 +39,13 @@ export class PortfolioApi {
    * @param {number|string} args.currencyId   - REQUIRED. Use a value from
    *   `client.reference.listEvaluationCurrencies()` or the user's profile
    *   `selectedPortfolioPanelCurrencyID`.
-   */
-  /**
    * @param {{ portfolioKey: string, currencyId: number|string }} args
    * @returns {Promise<import('../types.js').BalanceEntry[]>}
    */
-  getBalance({ portfolioKey, currencyId } = {}) {
-    if (!portfolioKey) throw new ValidationError('getBalance: portfolioKey required');
+  getCash({ portfolioKey, currencyId } = {}) {
+    if (!portfolioKey) throw new ValidationError('getCash: portfolioKey required');
     if (currencyId === undefined || currencyId === null || currencyId === '') {
-      throw new ValidationError('getBalance: currencyId required (use evaluation currency id)');
+      throw new ValidationError('getCash: currencyId required (use evaluation currency id)');
     }
     return this.transport.get('/api/api/Portfolio/GetBalances', {
       query: { portfolioKey, currencyId },
@@ -55,14 +53,14 @@ export class PortfolioApi {
   }
 
   /**
-   * Extended balance info (includes blocked, transferable, evaluated totals).
+   * Extended cash details (includes blocked, transferable, evaluated totals).
    * @param {{ portfolioKey: string, currencyId: number|string }} args
    * @returns {Promise<import('../types.js').BalanceInfoSection[]>}
    */
-  getBalanceInfo({ portfolioKey, currencyId } = {}) {
-    if (!portfolioKey) throw new ValidationError('getBalanceInfo: portfolioKey required');
+  getCashDetails({ portfolioKey, currencyId } = {}) {
+    if (!portfolioKey) throw new ValidationError('getCashDetails: portfolioKey required');
     if (currencyId === undefined || currencyId === null || currencyId === '') {
-      throw new ValidationError('getBalanceInfo: currencyId required');
+      throw new ValidationError('getCashDetails: currencyId required');
     }
     return this.transport.get('/api/api/Portfolio/GetBalancesInfo', {
       query: { portfolioKey, currencyId },
@@ -70,12 +68,12 @@ export class PortfolioApi {
   }
 
   /**
-   * Account-transfer relationships for the portfolio.
+   * Cash transfer relationships for the portfolio.
    * @param {{ portfolioKey: string }} args
    * @returns {Promise<import('../types.js').AccountTransfer[]>}
    */
-  getAccountsTransfer({ portfolioKey } = {}) {
-    if (!portfolioKey) throw new ValidationError('getAccountsTransfer: portfolioKey required');
+  getCashTransfers({ portfolioKey } = {}) {
+    if (!portfolioKey) throw new ValidationError('getCashTransfers: portfolioKey required');
     return this.transport.get('/api/api/Portfolio/GetAccountsTransfer', { query: { portfolioKey } });
   }
 
@@ -90,7 +88,7 @@ export class PortfolioApi {
   }
 
   /**
-   * Position snapshot (open positions + valuation) at `endDate`.
+   * Holdings snapshot (open positions + valuation) at `endDate`.
    *
    * @param {object} args
    * @param {string} args.portfolioKey
@@ -99,8 +97,8 @@ export class PortfolioApi {
    * @param {object} [args.queryModel]     - {fieldKeys, sortKey, sortDirection, page, pageSize}
    * @returns {Promise<import('../types.js').PortfolioSelectResult>}
    */
-  listPositions({ portfolioKey, endDate, queryModel } = {}) {
-    if (!portfolioKey) throw new ValidationError('listPositions: portfolioKey required');
+  getHoldings({ portfolioKey, endDate, queryModel } = {}) {
+    if (!portfolioKey) throw new ValidationError('getHoldings: portfolioKey required');
     const qm = { ...(queryModel || {}) };
     if (qm.page === undefined) qm.page = 1;
     if (qm.pageSize === undefined) qm.pageSize = 200;

@@ -166,14 +166,14 @@ async function menu(title, items) {
 function mainMenu(client, ctx) {
   return menu('MAIN MENU', [
     { label: 'View profile',             run: () => doProfile(client) },
-    { label: 'View markets (exchanges)', run: () => doExchanges(client) },
+    { label: 'Markets',                  run: () => doExchanges(client) },
     { label: 'View accounts',            run: () => doAccounts(client, ctx) },
-    { label: 'Portfolio...',             run: () => portfolioMenu(client, ctx) },
+    { label: 'Holdings & cash',          run: () => portfolioMenu(client, ctx) },
     { label: 'Orders...',                run: () => ordersMenu(client, ctx) },
     { label: 'Reference data...',        run: () => referenceMenu(client) },
     { label: 'Refresh token now',        run: () => doRefresh(client) },
-    { label: 'Logout',                   quit: 'logout' },
-    { label: 'Quit without logout',      quit: 'quit' },
+    { label: 'Sign out',                 quit: 'logout' },
+    { label: 'Exit',                     quit: 'quit' },
   ]);
 }
 
@@ -218,12 +218,12 @@ function portfolioMenuTitle(ctx) {
 function portfolioMenu(client, ctx) {
   return menu(() => portfolioMenuTitle(ctx), [
     {
-      label: 'Balance',
+      label: 'Cash',
       run: async () => {
         const k = await ensurePortfolio(client, ctx);
         const c = await ensureCurrency(client, ctx);
-        heading('Balance');
-        table(await client.portfolio.getBalance({ portfolioKey: k, currencyId: c }), [
+        heading('Cash');
+        table(await client.portfolio.getCash({ portfolioKey: k, currencyId: c }), [
           { key: 'title',    label: 'Title',    max: 35 },
           { key: 'value',    label: 'Amount',   align: 'right', format: (v) => v?.formatted ?? '' },
           { key: 'value',    label: 'Currency', max: 6,         format: (v) => v?.currency  ?? '' },
@@ -231,12 +231,12 @@ function portfolioMenu(client, ctx) {
       },
     },
     {
-      label: 'Positions (snapshot)',
+      label: 'Holdings',
       run: async () => {
         const k = await ensurePortfolio(client, ctx);
         const cur = activeCurrencyName(ctx) ?? '?';
-        heading('Positions');
-        const res = await client.portfolio.listPositions({ portfolioKey: k });
+        heading('Holdings');
+        const res = await client.portfolio.getHoldings({ portfolioKey: k });
         table(res.Positions.Items, [
           { key: 'Code',             label: 'Symbol',           max: 10 },
           { key: 'Market',           label: 'Market',           max: 8  },
@@ -264,11 +264,11 @@ function portfolioMenu(client, ctx) {
       },
     },
     {
-      label: 'Account transfers',
+      label: 'Cash transfers',
       run: async () => {
         const k = await ensurePortfolio(client, ctx);
-        heading('Account transfers');
-        table(await client.portfolio.getAccountsTransfer({ portfolioKey: k }), [
+        heading('Cash transfers');
+        table(await client.portfolio.getCashTransfers({ portfolioKey: k }), [
           { key: 'title',             label: 'Account',   max: 15 },
           { key: 'currency',          label: 'Ccy',       max: 4  },
           { key: 'balance',           label: 'Balance',   align: 'right', format: (v) => v?.value?.formatted ?? String(v ?? '') },
@@ -277,7 +277,7 @@ function portfolioMenu(client, ctx) {
       },
     },
     { label: 'Switch active account',      run: async () => { await chooseAccount(client, ctx); } },
-    { label: 'Switch evaluation currency', run: async () => { await chooseCurrency(client, ctx); } },
+    { label: 'Display currency',           run: async () => { await chooseCurrency(client, ctx); } },
     { label: 'Go back', back: true },
   ]);
 }
@@ -297,7 +297,7 @@ function ordersMenu(client, ctx) {
 
   return menu('ORDERS', [
     {
-      label: 'Search (all)',
+      label: 'All orders',
       run: async () => {
         const k = await ensurePortfolio(client, ctx);
         heading('Orders (all)');
@@ -307,7 +307,7 @@ function ordersMenu(client, ctx) {
       },
     },
     {
-      label: 'Search by date range',
+      label: 'Filter by dates',
       run: async () => {
         const k         = await ensurePortfolio(client, ctx);
         const startDate = await ask('start date YYYY-MM-DD (blank = none): ');
@@ -323,7 +323,7 @@ function ordersMenu(client, ctx) {
       },
     },
     {
-      label: 'Get one order',
+      label: 'Order details',
       run: async () => {
         const n = await ask('orderNumber: ');
         heading('Order ' + n);
@@ -334,7 +334,7 @@ function ordersMenu(client, ctx) {
       },
     },
     {
-      label: 'Get order actions',
+      label: 'Available actions',
       run: async () => {
         const n = await ask('orderNumber: ');
         heading('Actions ' + n);
@@ -343,7 +343,7 @@ function ordersMenu(client, ctx) {
       },
     },
     {
-      label: 'Get order history',
+      label: 'Execution history',
       run: async () => {
         const n = await ask('orderNumber: ');
         heading('History ' + n);
@@ -366,7 +366,7 @@ async function doProfile(client) {
 
 async function doExchanges(client) {
   heading('Exchanges');
-  const rows = await client.markets.listExchanges();
+  const rows = await client.markets.list();
   if (!Array.isArray(rows) || !rows.length) { dump(rows); return; }
   const keys = Object.keys(rows[0]);
   const cols = [

@@ -46,15 +46,15 @@ console.log('\nAccounts:');
 accounts.forEach(a => console.log(` ${a.selected ? '★' : ' '} ${a.displayName} (${a.portfolioKey})`));
 
 const currencyId = client2.accounts.defaultCurrencyId(active);
-const balances   = await client2.portfolio.getBalance({
+const cash = await client2.portfolio.getCash({
   portfolioKey: active.portfolioKey,
   currencyId,
 });
-console.log('\nBalance:');
-balances.forEach(b => console.log(` ${b.title}: ${b.value}`));
+console.log('\nCash:');
+cash.forEach(b => console.log(` ${b.title}: ${b.value?.formatted ?? b.value}`));
 
-const positions = await client2.portfolio.listPositions({ portfolioKey: active.portfolioKey });
-console.log(`\nOpen positions: ${positions.Positions.TotalItemCount}`);
-positions.Positions.Items.forEach(p =>
+const holdings = await client2.portfolio.getHoldings({ portfolioKey: active.portfolioKey });
+console.log(`\nHoldings: ${holdings.Positions.TotalItemCount}`);
+holdings.Positions.Items.forEach(p =>
   console.log(` ${p.Code} @ ${p.Market}  qty=${p.SecurityBalance}  avg=${p.AvgPrice}`)
 );
