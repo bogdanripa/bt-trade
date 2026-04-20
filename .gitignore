@@ -1,0 +1,33 @@
+# Dependencies (the module itself has none, but dev tooling might)
+node_modules/
+
+# Build outputs / caches
+dist/
+build/
+*.tgz
+.cache/
+
+# Environment / secrets — never commit credentials or saved sessions
+.env
+.env.*
+bt-trade-session.json
+*.pem
+*.key
+
+# Editor / OS noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Coverage
+coverage/
+.nyc_output/

@@ -1,0 +1,287 @@
+/**
+ * Authentication lifecycle for bt-trade.ro.
+ *
+ * Verified against the live Angular bundle (chunk-FFWVNPBH.js):
+ *
+ *   login(t, r, o, i) {
+ *     let s = o ? `?code=${o}` : '';
+ *     POST ${authUrl}/RefreshToken${s}  (application/json)
+ *     Body: { grant_type:'password', username: t.replace(/\s/g,''),
+ *             password: encodeURIComponent(r), client_id:'bttrade',
+ *             recaptcha: i ?? '', platform:'', version: null }
+ *   }
+ *
+ *   refreshLogin(t) {
+ *     POST ${authUrl}/RefreshToken  (application/x-www-form-urlencoded)
+ *     Body: `grant_type=refresh_token&client_id=bttrade&refresh_token=${t}`
+ *   }
+ *
+ *   logout(t) {
+ *     DELETE ${apiUrl}/User/Logout?token=${t}
+ *   }
+ *
+ * Step 1 carries creds, step 2 carries the typed 5-digit OTP in the URL as
+ * ?code=<otp>. Step 2 must also send Authorization: Bearer <pending-token>
+ * from step 1 (the Angular interceptor attaches it transparently).
+ */
+
+import { AuthError, ValidationError, errorFromResponse } from './errors.js';
+
+const AUTH_PATH = '/api/RefreshToken';
+const LOGOUT_PATH = '/api/api/User/Logout';
+const CLIENT_ID = 'bttrade';
+
+/**
+ * @typedef {object} SessionSnapshot
+ * @property {string} username
+ * @property {string} accessToken
+ * @property {string} refreshToken
+ * @property {number} expiresAt        - epoch ms when the access token expires
+ * @property {string|null} sessionId
+ */
+
+/**
+ * @typedef {object} OtpPromptInfo
+ * @property {string} prefix        - displayed-only 2-digit prefix returned by step 1
+ * @property {string} details       - human-readable message from server (romanian)
+ * @property {number} expiresIn     - seconds until the SMS code expires
+ */
+
+/**
+ * @typedef {(info: OtpPromptInfo) => Promise<string>} OtpProvider
+ *   Function the caller supplies to produce the SMS code. Receives the prefix,
+ *   the details message, and the expiresIn window. Should return the typed
+ *   digits (with or without the prefix — it will be normalized).
+ */
+
+const SAFETY_MARGIN_MS = 60_000;  // refresh proactively when <60s to expiry
+
+/**
+ * Owns the tokens and knows how to renew them. Injected into Transport.
+ */
+export class AuthSession {
+  /**
+   * @param {object} opts
+   * @param {import('./transport.js').Transport} opts.transport
+   * @param {OtpProvider}                          opts.otpProvider
+   * @param {(msg:string,data?:any)=>void}        [opts.log]
+   * @param {(snap: SessionSnapshot|null)=>void|Promise<void>} [opts.onSessionChange]
+   *   Invoked whenever the session state changes (after login, refresh, or
+   *   logout). Callers use it to persist the snapshot. Called with `null` on
+   *   logout. Exceptions from the callback are logged but not rethrown.
+   */
+  constructor(opts) {
+    if (!opts.transport) throw new ValidationError('AuthSession: transport is required');
+    if (!opts.otpProvider) throw new ValidationError('AuthSession: otpProvider is required');
+    this.transport = opts.transport;
+    this.otpProvider = opts.otpProvider;
+    this.log = opts.log || (() => {});
+    this.onSessionChange = opts.onSessionChange || null;
+
+    /** @type {SessionSnapshot | null} */
+    this.snapshot = null;
+    /** @type {string | null} password in memory, used for step-2 retry after step-1 */
+    this._password = null;
+    /** @type {Promise<void> | null} in-flight refresh, deduped for concurrent calls */
+    this._refreshing = null;
+  }
+
+  // ---- factory / restore ----
+
+  /** Restore from a prior `snapshot`; only needs access/refresh tokens to operate. */
+  restore(snapshot) {
+    if (!snapshot || !snapshot.accessToken || !snapshot.refreshToken) {
+      throw new ValidationError('AuthSession.restore: snapshot must include access/refresh tokens');
+    }
+    this.snapshot = { ...snapshot };
+    this._password = null;
+  }
+
+  /** Returns a serializable snapshot, safe to persist. Does NOT include the password. */
+  toSnapshot() {
+    return this.snapshot ? { ...this.snapshot } : null;
+  }
+
+  /**
+   * Full login flow: step 1 (creds) -> prompt OTP -> step 2 (creds + ?code).
+   * Returns the session snapshot on success.
+   */
+  async login(username, password) {
+    if (!username || !password) {
+      throw new ValidationError('login: username and password are required');
+    }
+
+    const cleanUser = String(username).replace(/\s/g, '');
+    const baseBody = {
+      grant_type: 'password',
+      username: cleanUser,
+      password: encodeURIComponent(password),
+      client_id: CLIENT_ID,
+      recaptcha: '',
+      platform: '',
+      version: null,
+    };
+
+    // Step 1
+    const r1 = await this.transport.post(AUTH_PATH, { body: baseBody, noAuth: true });
+
+    // A fully successful (no 2FA) response has refresh_token. Otherwise we expect
+    // a pending access_token plus a `details` message announcing the SMS.
+    if (!r1.refresh_token) {
+      if (!r1.access_token) {
+        throw new AuthError('Login response missing tokens', { body: r1 });
+      }
+      const prefix = r1.prefix || '';
+      const info = {
+        prefix,
+        details: r1.details || 'SMS code required',
+        expiresIn: Number(r1.expires_in) || 0,
+      };
+      const typed = await this.otpProvider(info);
+      const digits = normalizeOtp(typed, prefix);
+      if (!digits) throw new ValidationError('OTP provider returned no digits');
+
+      const pendingToken = r1.access_token;
+      // Step 2: same body, add ?code=<otp>, send pending token as bearer.
+      const r2 = await this.transport.post(AUTH_PATH, {
+        body: baseBody,
+        query: { code: digits },
+        bearer: pendingToken,
+      });
+      if (!r2.refresh_token || !r2.access_token) {
+        throw new AuthError('OTP accepted but session tokens missing', { body: r2 });
+      }
+      this.#adoptTokens(cleanUser, r2, password);
+      await this.#emitChange();
+      return this.toSnapshot();
+    }
+
+    this.#adoptTokens(cleanUser, r1, password);
+    await this.#emitChange();
+    return this.toSnapshot();
+  }
+
+  /**
+   * Returns a non-expired access token. Triggers refresh() if within the
+   * safety margin of expiry and the caller asked for auto-refresh.
+   */
+  async getAccessToken({ refreshIfNear = false } = {}) {
+    if (!this.snapshot) throw new AuthError('Not logged in', { code: 'NOT_LOGGED_IN' });
+    if (refreshIfNear && Date.now() + SAFETY_MARGIN_MS >= this.snapshot.expiresAt) {
+      await this.refresh();
+    }
+    return this.snapshot.accessToken;
+  }
+
+  /**
+   * Refresh the access token using the refresh_token. Concurrent callers share
+   * a single in-flight promise to avoid burning the refresh_token.
+   */
+  refresh() {
+    if (!this.snapshot) throw new AuthError('Cannot refresh: no session', { code: 'NOT_LOGGED_IN' });
+    if (this._refreshing) return this._refreshing;
+
+    const rt = this.snapshot.refreshToken;
+    this._refreshing = (async () => {
+      try {
+        const body = {
+          grant_type: 'refresh_token',
+          client_id: CLIENT_ID,
+          refresh_token: rt,
+        };
+        const r = await this.transport.post(AUTH_PATH, { body, form: true, noAuth: true });
+        if (!r.access_token) {
+          throw new AuthError('Refresh response missing access_token', { body: r });
+        }
+        this.snapshot.accessToken = r.access_token;
+        if (r.refresh_token) this.snapshot.refreshToken = r.refresh_token;
+        if (r.expires_in) this.snapshot.expiresAt = Date.now() + Number(r.expires_in) * 1000;
+        if (r.SessionId) this.snapshot.sessionId = String(r.SessionId);
+        this.log('auth:refreshed', { expiresAt: new Date(this.snapshot.expiresAt).toISOString() });
+        await this.#emitChange();
+      } finally {
+        this._refreshing = null;
+      }
+    })();
+    return this._refreshing;
+  }
+
+  /**
+   * Revoke the server-side session. Safe to call when not logged in.
+   * Best-effort: network failures or stale tokens will NOT prevent local state
+   * from being cleared (and the onSessionChange callback from firing).
+   */
+  async logout() {
+    if (!this.snapshot) return;
+    const token = this.snapshot.accessToken;
+    try {
+      // Use the current access token as-is; don't pre-refresh. If it's
+      // expired, the server will accept or reject — either way we proceed
+      // to wipe local state.
+      await this.transport.delete(LOGOUT_PATH, {
+        query: { token },
+        bearer: token,
+        noRefresh: true,
+      });
+    } catch (e) {
+      this.log('auth:logout:server-error', { message: e.message });
+    } finally {
+      this.snapshot = null;
+      this._password = null;
+      await this.#emitChange();  // fires with null snapshot
+    }
+  }
+
+  // ---- private ----
+
+  async #emitChange() {
+    if (!this.onSessionChange) return;
+    try {
+      await this.onSessionChange(this.toSnapshot());
+    } catch (e) {
+      this.log('auth:onSessionChange:error', { message: e.message });
+    }
+  }
+
+  #adoptTokens(username, tokenResp, password) {
+    this.snapshot = {
+      username,
+      accessToken: tokenResp.access_token,
+      refreshToken: tokenResp.refresh_token,
+      expiresAt: Date.now() + (Number(tokenResp.expires_in) || 599) * 1000,
+      sessionId: tokenResp.SessionId ? String(tokenResp.SessionId) : null,
+    };
+    this._password = password || null;
+  }
+}
+
+// ---------- helpers ----------
+
+/**
+ * Strip non-digits and remove the prefix if the user accidentally included it.
+ * Matches the behaviour of the Cordova SMS retriever in the 2FA component.
+ */
+export function normalizeOtp(typed, prefix) {
+  const digits = String(typed).replace(/\D/g, '');
+  if (prefix && digits.startsWith(prefix) && digits.length > prefix.length) {
+    return digits.slice(prefix.length);
+  }
+  return digits;
+}
+
+/** Interactive OTP provider for CLI use. Prompts on stdin/stdout. */
+export function stdinOtpProvider() {
+  return async ({ prefix, details }) => {
+    // Lazy import readline so the module can be used headlessly.
+    const { createInterface } = await import('node:readline/promises');
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    try {
+      process.stderr.write(`\n[2FA] ${details}\n`);
+      if (prefix) process.stderr.write(`      Prefix (display only): "${prefix}"\n`);
+      const answer = await rl.question('Enter SMS code: ');
+      return answer.trim();
+    } finally {
+      rl.close();
+    }
+  };
+}

@@ -1,0 +1,49 @@
+{
+  "name": "bt-trade",
+  "version": "0.1.0",
+  "description": "Unofficial Node.js client for the bt-trade.ro trading platform (HTTP only, no SignalR, zero deps)",
+  "type": "module",
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "bt-trade": "./bin/bt-trade.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "src",
+    "bin",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "start": "node bin/bt-trade.js",
+    "check": "node --check src/index.js && node --check src/client.js && node --check bin/bt-trade.js"
+  },
+  "keywords": [
+    "bt-trade",
+    "bttrade",
+    "banca-transilvania",
+    "bvb",
+    "bucharest-stock-exchange",
+    "trading",
+    "stocks",
+    "etf",
+    "romania",
+    "api-client"
+  ],
+  "author": "Bogdan Ripa <bogdanripa@gmail.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bogdanripa/bt-trade.git"
+  },
+  "bugs": {
+    "url": "https://github.com/bogdanripa/bt-trade/issues"
+  },
+  "homepage": "https://github.com/bogdanripa/bt-trade#readme"
+}
