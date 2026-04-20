@@ -294,11 +294,12 @@ function portfolioMenu(client, ctx) {
 }
 
 function ordersMenu(client, ctx) {
+  const sideStr = (v) => typeof v === 'string' ? v : (v?.Short ?? v?.Name ?? v?.Value ?? '');
   const ORDER_COLS = [
-    { key: 'OrderNumberDisplay', label: 'Order #',   max: 14 },
+    { key: 'OrderNumber',        label: 'Order #',   align: 'right' },
     { key: 'DateShort',          label: 'Date',      max: 12 },
     { key: 'Code',               label: 'Symbol',    max: 10 },
-    { key: 'SideDisplay',        label: 'Side',      max: 6  },
+    { key: 'SideDisplayShort',   label: 'Side',      max: 6, format: sideStr },
     { key: 'TypeDisplay',        label: 'Type',      max: 10 },
     { key: 'Quantity',           label: 'Qty',       align: 'right' },
     { key: 'FilledQuantity',     label: 'Filled',    align: 'right' },
@@ -338,9 +339,9 @@ function ordersMenu(client, ctx) {
         const n = await ask('orderNumber: ');
         heading('Order ' + n);
         const o = await client.orders.get(n);
-        kv(o, ['OrderNumberDisplay','DateShort','Code','SideDisplay','TypeDisplay',
-                'Quantity','FilledQuantity','RemainingQuantity','PriceDisplay',
-                'ValabilityDisplay','ValidUntil','PortfolioKey']);
+        kv(o, ['OrderNumber','OrderNumberDisplay','DateShort','Code','SideDisplayShort',
+                'TypeDisplay','Quantity','FilledQuantity','RemainingQuantity',
+                'PriceDisplay','ValabilityDisplay','ValidUntil','PortfolioKey']);
       },
     },
     {
