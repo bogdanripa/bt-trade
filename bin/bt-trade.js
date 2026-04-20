@@ -260,7 +260,7 @@ function portfolioMenu(client, ctx) {
       run: async () => {
         const k = await ensurePortfolio(client, ctx);
         heading('Cash');
-        table(await client.portfolio.getCashTransfers({ portfolioKey: k }), CASH_COLS);
+        table(await client.portfolio.getCashAccounts({ portfolioKey: k }), CASH_COLS);
       },
     },
     {

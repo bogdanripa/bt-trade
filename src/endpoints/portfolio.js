@@ -68,12 +68,12 @@ export class PortfolioApi {
   }
 
   /**
-   * Cash transfer relationships for the portfolio.
+   * Cash sub-accounts for the portfolio (one per currency/segment, e.g. BVB RON, INTL USD).
    * @param {{ portfolioKey: string }} args
    * @returns {Promise<import('../types.js').AccountTransfer[]>}
    */
-  getCashTransfers({ portfolioKey } = {}) {
-    if (!portfolioKey) throw new ValidationError('getCashTransfers: portfolioKey required');
+  getCashAccounts({ portfolioKey } = {}) {
+    if (!portfolioKey) throw new ValidationError('getCashAccounts: portfolioKey required');
     return this.transport.get('/api/api/Portfolio/GetAccountsTransfer', { query: { portfolioKey } });
   }
 
