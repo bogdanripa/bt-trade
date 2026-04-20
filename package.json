@@ -1,6 +1,6 @@
 {
   "name": "@bogdanripa/bt-trade",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Unofficial Node.js client for the bt-trade.ro trading platform (HTTP only, no SignalR, zero deps)",
   "type": "module",
   "main": "./src/index.js",
