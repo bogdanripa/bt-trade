@@ -148,7 +148,7 @@ function kv(obj, keys) {
 
 async function menu(title, items) {
   while (true) {
-    console.log('\n' + title);
+    console.log('\n' + (typeof title === 'function' ? title() : title));
     items.forEach((it, i) => console.log(`  [${i + 1}] ${it.label}`));
     const raw = await ask('> ');
     const idx = parseInt(raw, 10) - 1;
@@ -212,7 +212,7 @@ function portfolioMenuTitle(ctx) {
 }
 
 function portfolioMenu(client, ctx) {
-  return menu(portfolioMenuTitle(ctx), [
+  return menu(() => portfolioMenuTitle(ctx), [
     {
       label: 'Balance',
       run: async () => {
