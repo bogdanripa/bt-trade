@@ -171,9 +171,8 @@ async function menu(title, items) {
 
 function mainMenu(client, ctx) {
   return menu('MAIN MENU', [
-    { label: 'View profile',             run: () => doProfile(client) },
+    { label: 'Profile & accounts',        run: () => doProfileAndAccounts(client, ctx) },
     { label: 'Markets',                  run: () => doExchanges(client) },
-    { label: 'View accounts',            run: () => doAccounts(client, ctx) },
     { label: 'Holdings & cash',          run: () => portfolioMenu(client, ctx) },
     { label: 'Orders...',                run: () => ordersMenu(client, ctx) },
     { label: 'Reference data...',        run: () => referenceMenu(client) },
@@ -223,9 +222,10 @@ function activeAccountName(ctx) {
 
 function portfolioMenu(client, ctx) {
   const CASH_COLS = [
-    { key: 'title', label: 'Title',    max: 35 },
-    { key: 'value', label: 'Amount',   align: 'right', format: (v) => v?.formatted ?? '' },
-    { key: 'value', label: 'Currency', max: 6,         format: (v) => v?.currency  ?? '' },
+    { key: 'title',             label: 'Account',   max: 15 },
+    { key: 'currency',          label: 'Ccy',       max: 4  },
+    { key: 'balance',           label: 'Balance',   align: 'right', format: (v) => v?.value?.formatted ?? String(v ?? '') },
+    { key: 'availableTransfer', label: 'Available', align: 'right', format: (v) => v?.value?.formatted ?? String(v ?? '') },
   ];
 
   const holdingsCols = () => {
@@ -260,18 +260,7 @@ function portfolioMenu(client, ctx) {
       run: async () => {
         const k = await ensurePortfolio(client, ctx);
         heading('Cash');
-        if (ctx.currencyId) {
-          table(await client.portfolio.getCash({ portfolioKey: k, currencyId: ctx.currencyId }), CASH_COLS);
-        } else {
-          if (!ctx.accounts) await doAccounts(client, ctx);
-          const active = ctx.accounts.find((a) => a.portfolioKey === k) || ctx.accounts[0];
-          const currencies = active?.portfolios?.[0]?.currencies ?? [];
-          if (!currencies.length) { console.log('  No currencies found — set a display currency first.'); return; }
-          for (const cur of currencies) {
-            console.log(`\n  ── ${cur.name} ─────────────────────────`);
-            table(await client.portfolio.getCash({ portfolioKey: k, currencyId: cur.id }), CASH_COLS);
-          }
-        }
+        table(await client.portfolio.getCashTransfers({ portfolioKey: k }), CASH_COLS);
       },
     },
     {
@@ -296,19 +285,6 @@ function portfolioMenu(client, ctx) {
           { key: 'currency',      label: 'Currency', max: 6  },
           { key: 'country',       label: 'Country',  max: 10 },
           { key: 'status',        label: 'Status',   max: 15, format: (v) => v?.name ?? String(v ?? '') },
-        ]);
-      },
-    },
-    {
-      label: 'Cash transfers',
-      run: async () => {
-        const k = await ensurePortfolio(client, ctx);
-        heading('Cash transfers');
-        table(await client.portfolio.getCashTransfers({ portfolioKey: k }), [
-          { key: 'title',             label: 'Account',   max: 15 },
-          { key: 'currency',          label: 'Ccy',       max: 4  },
-          { key: 'balance',           label: 'Balance',   align: 'right', format: (v) => v?.value?.formatted ?? String(v ?? '') },
-          { key: 'availableTransfer', label: 'Available', align: 'right', format: (v) => v?.value?.formatted ?? String(v ?? '') },
         ]);
       },
     },
@@ -391,11 +367,11 @@ function ordersMenu(client, ctx) {
 
 // ---------- actions ----------
 
-async function doProfile(client) {
+async function doProfileAndAccounts(client, ctx) {
   heading('Profile');
   const p = await client.profile.get();
   kv(p, ['displayName','userID','language','theme','lastLogin','serverTime','landingPage']);
-  console.log(`  clients        ${p.clients ? p.clients.length : 0}`);
+  await doAccounts(client, ctx);
 }
 
 async function doExchanges(client) {
