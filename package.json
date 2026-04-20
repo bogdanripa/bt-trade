@@ -1,5 +1,5 @@
 {
-  "name": "bt-trade",
+  "name": "@bogdanripa/bt-trade",
   "version": "0.1.0",
   "description": "Unofficial Node.js client for the bt-trade.ro trading platform (HTTP only, no SignalR, zero deps)",
   "type": "module",
@@ -9,7 +9,7 @@
     "./package.json": "./package.json"
   },
   "bin": {
-    "bt-trade": "./bin/bt-trade.js"
+    "bt-trade": "bin/bt-trade.js"
   },
   "engines": {
     "node": ">=18"
