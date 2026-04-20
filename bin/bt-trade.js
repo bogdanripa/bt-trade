@@ -227,22 +227,6 @@ function portfolioMenu(client, ctx) {
       },
     },
     {
-      label: 'Balance info',
-      run: async () => {
-        const k = await ensurePortfolio(client, ctx);
-        const c = await ensureCurrency(client, ctx);
-        heading('Balance info');
-        const sections = await client.portfolio.getBalanceInfo({ portfolioKey: k, currencyId: c });
-        for (const sec of sections) {
-          console.log('\n  ' + sec.title);
-          sec.balances.forEach((b) => {
-            const prefix = b.highlightText ? '▶ ' : '  ';
-            console.log('  ' + prefix + b.title);
-          });
-        }
-      },
-    },
-    {
       label: 'Positions (snapshot)',
       run: async () => {
         const k = await ensurePortfolio(client, ctx);
