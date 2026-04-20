@@ -325,8 +325,19 @@ async function doOrderPreview(client, ctx) {
   const qtyRaw = await ask('Quantity (blank to skip): ');
   const quantity = qtyRaw.trim() || null;
 
-  const result = await client.orders.preview({ portfolioKey: k, symbol, marketId, quantity, price, side, type });
-  dump(result);
+  const r = await client.orders.preview({ portfolioKey: k, symbol, marketId, quantity, price, side, type });
+  const fmt = (v) => v ? `${v.formatted} ${v.currency}` : '—';
+  console.log(`  Position      ${r.securityBalance ?? '—'}`);
+  console.log(`  Est. price    ${fmt(r.computedPrice)}`);
+  if (r.computedPrice?.info) console.log(`                (${r.computedPrice.info})`);
+  console.log(`  Net value     ${fmt(r.netValue)}`);
+  console.log(`  Commission    ${fmt(r.commission)}`);
+  if (r.commissionDetails?.balances?.length) {
+    r.commissionDetails.balances.forEach((b) => {
+      console.log(`    ${b.title.padEnd(30)} ${fmt(b.value)}`);
+    });
+  }
+  console.log(`  Available     ${fmt(r.availableCash)}`);
 }
 
 function ordersMenu(client, ctx) {
