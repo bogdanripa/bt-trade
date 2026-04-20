@@ -229,18 +229,15 @@ function portfolioMenu(client, ctx) {
     { key: 'availableTransfer', label: 'Available', align: 'right', format: (v) => v?.value?.formatted ?? String(v ?? '') },
   ];
 
-  const holdingsCols = () => {
-    const cur = activeCurrencyName(ctx) ?? '?';
-    return [
-      { key: 'Code',            label: 'Symbol',             max: 10 },
-      { key: 'Market',          label: 'Market',             max: 10 },
-      { key: 'SecurityBalance', label: 'Qty',                align: 'right' },
-      { key: 'AvgPrice',        label: 'Avg Price',          align: 'right' },
-      { key: 'LineEvaluation',  label: `Value (${cur})`,     align: 'right' },
-      { key: 'GainLoss',        label: `Gain/Loss (${cur})`, align: 'right' },
-      { key: 'PriceVariation',  label: 'Chg %',              align: 'right' },
-    ];
-  };
+  const holdingsCols = (cur = activeCurrencyName(ctx) ?? '?') => [
+    { key: 'Code',            label: 'Symbol',             max: 10 },
+    { key: 'Market',          label: 'Market',             max: 10 },
+    { key: 'SecurityBalance', label: 'Qty',                align: 'right' },
+    { key: 'AvgPrice',        label: 'Avg Price',          align: 'right' },
+    { key: 'LineEvaluation',  label: `Value (${cur})`,     align: 'right' },
+    { key: 'GainLoss',        label: `Gain/Loss (${cur})`, align: 'right' },
+    { key: 'PriceVariation',  label: 'Chg %',              align: 'right' },
+  ];
 
   return menu('HOLDINGS & CASH', [
     {
@@ -270,7 +267,8 @@ function portfolioMenu(client, ctx) {
         const k = await ensurePortfolio(client, ctx);
         heading('Holdings');
         const res = await client.portfolio.getHoldings({ portfolioKey: k, market: ctx.marketFilter ?? undefined });
-        table(res.Positions.Items, holdingsCols());
+        const evalCur = res.Total?.CurrencyRates?.find((c) => c.ID === res.Total?.CurrencyId)?.Name ?? activeCurrencyName(ctx) ?? '?';
+        table(res.Positions.Items, holdingsCols(evalCur));
         const suffix = ctx.marketFilter ? ` on ${ctx.marketFilter}` : ' across all markets';
         console.log(`  ${res.Positions.TotalItemCount} position${res.Positions.TotalItemCount !== 1 ? 's' : ''}${suffix}`);
       },
@@ -431,7 +429,7 @@ async function doExchanges(client) {
   const rows = await client.markets.list();
   if (!Array.isArray(rows) || !rows.length) { dump(rows); return; }
   const sorted = rows.slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-  sorted.forEach((m) => console.log(`  [${m.id}] ${m.name || m.code || '?'}`));
+  sorted.forEach((m) => console.log(`  [${String(m.id).padStart(3)}] ${m.name || m.code || '?'}`));
 }
 
 async function doAccounts(client, ctx) {
