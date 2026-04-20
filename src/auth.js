@@ -88,6 +88,8 @@ export class AuthSession {
     this._password = null;
     /** @type {Promise<void> | null} in-flight refresh, deduped for concurrent calls */
     this._refreshing = null;
+    /** @type {ReturnType<typeof setTimeout> | null} background auto-refresh timer */
+    this._refreshTimer = null;
   }
 
   // ---- factory / restore ----
@@ -99,6 +101,7 @@ export class AuthSession {
     }
     this.snapshot = { ...snapshot };
     this._password = null;
+    this.#scheduleAutoRefresh();
   }
 
   /** Returns a serializable snapshot, safe to persist. Does NOT include the password. */
@@ -158,11 +161,13 @@ export class AuthSession {
       }
       this.#adoptTokens(cleanUser, r2, password);
       await this.#emitChange();
+      this.#scheduleAutoRefresh();
       return this.toSnapshot();
     }
 
     this.#adoptTokens(cleanUser, r1, password);
     await this.#emitChange();
+    this.#scheduleAutoRefresh();
     return this.toSnapshot();
   }
 
@@ -205,6 +210,7 @@ export class AuthSession {
         if (r.SessionId) this.snapshot.sessionId = String(r.SessionId);
         this.log('auth:refreshed', { expiresAt: new Date(this.snapshot.expiresAt).toISOString() });
         await this.#emitChange();
+        this.#scheduleAutoRefresh();
       } finally {
         this._refreshing = null;
       }
@@ -232,6 +238,7 @@ export class AuthSession {
     } catch (e) {
       this.log('auth:logout:server-error', { message: e.message });
     } finally {
+      this.#clearAutoRefresh();
       this.snapshot = null;
       this._password = null;
       await this.#emitChange();  // fires with null snapshot
@@ -239,6 +246,32 @@ export class AuthSession {
   }
 
   // ---- private ----
+
+  #scheduleAutoRefresh() {
+    this.#clearAutoRefresh();
+    if (!this.snapshot) return;
+    const delay = Math.max(this.snapshot.expiresAt - Date.now() - SAFETY_MARGIN_MS, 0);
+    this._refreshTimer = setTimeout(async () => {
+      try {
+        await this.refresh();
+        // refresh() calls #scheduleAutoRefresh() on success via #adoptTokens flow
+      } catch (e) {
+        this.log('auth:autoRefresh:error', { message: e.message });
+        // Retry in 30s on transient failure; AuthError means session is dead.
+        if (!(e instanceof AuthError)) {
+          this._refreshTimer = setTimeout(() => this.#scheduleAutoRefresh(), 30_000);
+          if (this._refreshTimer.unref) this._refreshTimer.unref();
+        }
+      }
+    }, delay);
+    // Don't prevent the process from exiting naturally.
+    if (this._refreshTimer.unref) this._refreshTimer.unref();
+    this.log('auth:autoRefresh:scheduled', { inMs: delay, at: new Date(Date.now() + delay).toISOString() });
+  }
+
+  #clearAutoRefresh() {
+    if (this._refreshTimer) { clearTimeout(this._refreshTimer); this._refreshTimer = null; }
+  }
 
   async #emitChange() {
     if (!this.onSessionChange) return;
