@@ -300,14 +300,13 @@ async function doOrderPreview(client, ctx) {
   const symbol = (await ask('Symbol (e.g. TVBETETF): ')).toUpperCase().trim();
   if (!symbol) return;
 
-  // Let user pick market from the live list (sorted alphabetically).
+  // Let user pick market from the live list (sorted alphabetically, keyed by id).
   const markets = (await client.markets.list()).slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-  markets.forEach((m, i) => console.log(`  [${i + 1}] ${m.name || m.code || '?'}  (id=${m.id})`));
-  const mRaw = (await ask(`Market — list number or id: `)).trim();
+  markets.forEach((m) => console.log(`  [${m.id}] ${m.name || m.code || '?'}`));
+  const mRaw = (await ask('Market id: ')).trim();
   const mNum = parseInt(mRaw, 10);
-  // Accept either list index (1-based) or raw market id.
-  let market = markets.find((m) => m.id === mNum) ?? markets[mNum - 1];
-  if (!market) { console.log('  invalid selection'); return; }
+  const market = markets.find((m) => m.id === mNum);
+  if (!market) { console.log('  invalid id'); return; }
   const marketId = market.id;
 
   const sideRaw = await ask('Side [1=buy / 2=sell]: ');
@@ -428,17 +427,11 @@ async function doProfileAndAccounts(client, ctx) {
 }
 
 async function doExchanges(client) {
-  heading('Exchanges');
+  heading('Markets');
   const rows = await client.markets.list();
   if (!Array.isArray(rows) || !rows.length) { dump(rows); return; }
-  const keys = Object.keys(rows[0]);
-  const cols = [
-    { key: 'id',   label: 'ID',   align: 'right', max: 8 },
-    { key: 'name', label: 'Name', max: 30 },
-    { key: 'code', label: 'Code', max: 10 },
-  ].filter((c) => keys.includes(c.key));
-  if (cols.length < 2) table(rows);
-  else table(rows, cols);
+  const sorted = rows.slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  sorted.forEach((m) => console.log(`  [${m.id}] ${m.name || m.code || '?'}`));
 }
 
 async function doAccounts(client, ctx) {
