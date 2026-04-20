@@ -115,7 +115,7 @@ export class OrdersApi {
         portfolioKey,
         symbol: { code: symbol, marketId: Number(marketId) },
         quantity: quantity !== null && quantity !== undefined ? String(quantity) : null,
-        price: price !== undefined ? String(price) : undefined,
+        price:    price !== undefined && price !== null ? String(price) : null,
         side,
         type,
       },
@@ -142,15 +142,15 @@ export class OrdersApi {
     if (!symbol)       throw new ValidationError('orders.placeOrder: symbol required');
     if (!marketId)     throw new ValidationError('orders.placeOrder: marketId required');
     if (!quantity)     throw new ValidationError('orders.placeOrder: quantity required');
-    if (!price)        throw new ValidationError('orders.placeOrder: price required');
     if (!side)         throw new ValidationError('orders.placeOrder: side required');
+    if (type !== 'market' && !price) throw new ValidationError('orders.placeOrder: price required for non-market orders');
 
     const order = {
       symbol:      { code: symbol, marketId: Number(marketId) },
       portfolioKey,
       quantity:    String(quantity),
       side,
-      price:       String(price),
+      price:       price !== undefined && price !== null ? String(price) : null,
       type,
       valability,
       signed:      false,
