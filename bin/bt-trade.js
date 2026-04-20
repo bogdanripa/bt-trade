@@ -291,21 +291,31 @@ function portfolioMenu(client, ctx) {
   ]);
 }
 
+async function pickInstrument(client, symbolHint) {
+  const code = symbolHint || (await ask('Symbol (e.g. TSLA): ')).toUpperCase().trim();
+  if (!code) return null;
+  const results = await client.markets.searchInstrument(code);
+  if (!Array.isArray(results) || !results.length) { console.log(`  No instruments found for "${code}"`); return null; }
+  results.forEach((r, i) => {
+    console.log(`  [${i + 1}] ${r.code}  ${r.name}  —  ${r.market}  ${r.currency}`);
+  });
+  if (results.length === 1) {
+    console.log('  (auto-selected)');
+    return results[0];
+  }
+  const raw = (await ask(`Pick [1-${results.length}]: `)).trim();
+  const idx = parseInt(raw, 10) - 1;
+  if (idx < 0 || idx >= results.length) { console.log('  invalid selection'); return null; }
+  return results[idx];
+}
+
 async function doOrderPreview(client, ctx) {
   heading('Order Preview');
   const k = await ensurePortfolio(client, ctx);
 
-  const symbol = (await ask('Symbol (e.g. TVBETETF): ')).toUpperCase().trim();
-  if (!symbol) return;
-
-  // Let user pick market from the live list (sorted alphabetically, keyed by id).
-  const markets = (await client.markets.list()).slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-  markets.forEach((m) => console.log(`  [${String(m.id).padStart(3)}] ${m.name || m.code || '?'}`));
-  const mRaw = (await ask('Market id: ')).trim();
-  const mNum = parseInt(mRaw, 10);
-  const market = markets.find((m) => m.id === mNum);
-  if (!market) { console.log('  invalid id'); return; }
-  const marketId = market.id;
+  const instrument = await pickInstrument(client);
+  if (!instrument) return;
+  const { code: symbol, marketId } = instrument;
 
   const sideRaw = await ask('Side [1=buy / 2=sell]: ');
   const side = sideRaw.trim() === '2' ? 'sell' : 'buy';
