@@ -302,7 +302,7 @@ async function doOrderPreview(client, ctx) {
 
   // Let user pick market from the live list (sorted alphabetically, keyed by id).
   const markets = (await client.markets.list()).slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-  markets.forEach((m) => console.log(`  [${m.id}] ${m.name || m.code || '?'}`));
+  markets.forEach((m) => console.log(`  [${String(m.id).padStart(3)}] ${m.name || m.code || '?'}`));
   const mRaw = (await ask('Market id: ')).trim();
   const mNum = parseInt(mRaw, 10);
   const market = markets.find((m) => m.id === mNum);
