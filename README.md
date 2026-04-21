@@ -121,11 +121,11 @@ client.portfolio.getCash({ portfolioKey, currencyId })
 client.portfolio.getCashDetails({ portfolioKey, currencyId })
 client.portfolio.getCashAccounts({ portfolioKey })
 client.portfolio.getBankAccounts({ portfolioKey })
-client.portfolio.getHoldings({ portfolioKey, market?, endDate?, queryModel? })
+client.portfolio.getHoldings({ portfolioKey, market?, endDate? })
 
 // Orders
 client.orders.search({ portfolioKey, statuses?, side?, symbol?,
-                        startDate?, endDate?, queryModel? })
+                        startDate?, endDate? })
 client.orders.get(orderNumber)
 client.orders.getActions(orderNumber)
 client.orders.getHistory(orderNumber)
