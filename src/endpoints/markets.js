@@ -29,4 +29,24 @@ export class MarketsApi {
       query: { code: String(code).toUpperCase() },
     });
   }
+
+  /**
+   * Fetch live instrument data including bid/ask prices, currency, and trading rules
+   * for a specific symbol on a specific market.
+   *
+   * @param {object} args
+   * @param {string} args.portfolioKey
+   * @param {string} args.code      - ticker symbol, e.g. "TSLA"
+   * @param {number} args.marketId  - exchange ID from searchInstrument() or markets.list()
+   * @returns {Promise<{bid:number, ask:number, currency:string, market:string, name:string, status:string, allowMarket:boolean}>}
+   */
+  getInstrument({ portfolioKey, code, marketId } = {}) {
+    if (!portfolioKey) throw new Error('markets.getInstrument: portfolioKey required');
+    if (!code)         throw new Error('markets.getInstrument: code required');
+    if (!marketId)     throw new Error('markets.getInstrument: marketId required');
+    return this.transport.post('/api/api/PersonalLists/Instrument/GetBySymbol', {
+      query: { portfolioKey },
+      body:  { code: String(code).toUpperCase(), marketId: Number(marketId) },
+    });
+  }
 }

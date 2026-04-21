@@ -33,9 +33,13 @@ import { ValidationError } from './errors.js';
  * @property {import('./auth.js').OtpProvider} [otpProvider]
  *                                       - default: interactive stdin (CLI use only)
  * @property {(msg:string,data?:any)=>void} [log]   - optional logger; pass console.error for debug
+ * @property {boolean}  [debug]          - when true, log full unredacted request/response bodies
  * @property {number}   [timeoutMs]      - per-request timeout, default 30_000
  * @property {(snap: import('./auth.js').SessionSnapshot | null) => void | Promise<void>}
  *          [onSessionChange]           - persistence hook (called after login/refresh/logout)
+ * @property {(err: Error) => void} [onExpired]
+ *          - called when the session dies and automatic re-login is not possible
+ *            (no stored credentials). Use to warn the user they need to log in again.
  */
 
 export class BTTradeClient {
@@ -47,6 +51,7 @@ export class BTTradeClient {
       baseUrl: opts.baseUrl,
       pathPrefix: demo ? '/demo' : '',
       log: opts.log,
+      debug: opts.debug ?? false,
       timeoutMs: opts.timeoutMs,
     });
     this.auth = new AuthSession({
@@ -55,6 +60,7 @@ export class BTTradeClient {
       demo,
       log: opts.log,
       onSessionChange: opts.onSessionChange,
+      onExpired: opts.onExpired,
     });
     // Wire auth into transport so it can refresh on 401.
     this.transport.setSession(this.auth);

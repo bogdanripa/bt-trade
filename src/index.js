@@ -11,7 +11,7 @@
  */
 
 export { BTTradeClient } from './client.js';
-export { AuthSession, stdinOtpProvider, ntfyOtpProvider, defaultNtfyTopic, normalizeOtp } from './auth.js';
+export { AuthSession, stdinOtpProvider, ntfyOtpProvider, defaultNtfyTopic, normalizeOtp, parseRefreshToken } from './auth.js';
 export { Transport } from './transport.js';
 export { toServerDate } from './endpoints/portfolio.js';
 

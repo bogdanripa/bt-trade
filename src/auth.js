@@ -36,8 +36,9 @@ const CLIENT_ID = 'bttrade';
  * @typedef {object} SessionSnapshot
  * @property {string} username
  * @property {string} accessToken
- * @property {string} refreshToken
- * @property {number} expiresAt        - epoch ms when the access token expires
+ * @property {string} refreshToken          - opaque token string (hex); never the raw JSON wrapper
+ * @property {string|null} refreshTokenExpires - ISO datetime when the refresh token expires, or null
+ * @property {number} expiresAt             - epoch ms when the access token expires
  * @property {string|null} sessionId
  */
 
@@ -56,7 +57,10 @@ const CLIENT_ID = 'bttrade';
  *   digits (with or without the prefix — it will be normalized).
  */
 
-const SAFETY_MARGIN_MS = 60_000;  // refresh proactively when <60s to expiry
+/** Fire this many ms before the refresh token expires to get a new one while we still can. */
+const RT_FIRE_MARGIN_MS = 10_000;
+/** Fallback margin for access-token-based scheduling when RT expiry is unknown. */
+const AT_SAFETY_MARGIN_MS = 60_000;
 
 /**
  * Owns the tokens and knows how to renew them. Injected into Transport.
@@ -81,6 +85,7 @@ export class AuthSession {
     this.demo = opts.demo ?? false;
     this.log = opts.log || (() => {});
     this.onSessionChange = opts.onSessionChange || null;
+    this.onExpired = opts.onExpired || null;
 
     /** @type {SessionSnapshot | null} */
     this.snapshot = null;
@@ -177,7 +182,9 @@ export class AuthSession {
    */
   async getAccessToken({ refreshIfNear = false } = {}) {
     if (!this.snapshot) throw new AuthError('Not logged in', { code: 'NOT_LOGGED_IN' });
-    if (refreshIfNear && Date.now() + SAFETY_MARGIN_MS >= this.snapshot.expiresAt) {
+    // Only refresh on-demand when the access token is actually expired.
+    // Proactive refresh before expiry is handled by the background timer.
+    if (refreshIfNear && Date.now() >= this.snapshot.expiresAt) {
       await this.refresh();
     }
     return this.snapshot.accessToken;
@@ -191,7 +198,16 @@ export class AuthSession {
     if (!this.snapshot) throw new AuthError('Cannot refresh: no session', { code: 'NOT_LOGGED_IN' });
     if (this._refreshing) return this._refreshing;
 
-    const rt = this.snapshot.refreshToken;
+    // Fast-fail if the refresh token itself has already expired — no point hitting the server.
+    if (this.snapshot.refreshTokenExpires) {
+      const rtExpMs = new Date(this.snapshot.refreshTokenExpires).getTime();
+      if (!isNaN(rtExpMs) && Date.now() >= rtExpMs) {
+        this.log('auth:refresh:rtExpired', { expiredAt: this.snapshot.refreshTokenExpires });
+        return Promise.reject(new AuthError('Refresh token has expired', { code: 'REFRESH_TOKEN_EXPIRED' }));
+      }
+    }
+
+    const rt = this.snapshot.refreshToken;   // already the plain token string
     this._refreshing = (async () => {
       try {
         const body = {
@@ -205,7 +221,13 @@ export class AuthSession {
           throw new AuthError('Refresh response missing access_token', { body: r });
         }
         this.snapshot.accessToken = r.access_token;
-        if (r.refresh_token) this.snapshot.refreshToken = r.refresh_token;
+        if (r.refresh_token) {
+          const { token: newRt, expires: newRtExp } = parseRefreshToken(r.refresh_token);
+          const rotated = newRt !== this.snapshot.refreshToken;
+          this.snapshot.refreshToken = newRt;
+          this.snapshot.refreshTokenExpires = newRtExp;
+          this.log('auth:refreshed:rt', { rotated, expires: newRtExp });
+        }
         this.snapshot.expiresAt = tokenExpiry(r);
         if (r.SessionId) this.snapshot.sessionId = String(r.SessionId);
         this.log('auth:refreshed', { expiresAt: new Date(this.snapshot.expiresAt).toISOString() });
@@ -250,15 +272,32 @@ export class AuthSession {
   #scheduleAutoRefresh() {
     this.#clearAutoRefresh();
     if (!this.snapshot) return;
-    const delay = Math.max(this.snapshot.expiresAt - Date.now() - SAFETY_MARGIN_MS, 0);
+
+    const rtExpMs = this.snapshot.refreshTokenExpires
+      ? new Date(this.snapshot.refreshTokenExpires).getTime()
+      : null;
+
+    // Primary strategy: fire just before the refresh token expires.
+    // Each successful refresh rotates both tokens, so the timer gets rescheduled
+    // with a fresh RT expiry. The AT is refreshed lazily on-request between fires.
+    //
+    // Fallback: when RT expiry is unknown (plain-string token / old sessions),
+    // fall back to firing before the access token expires instead.
+    const delay = (rtExpMs && !isNaN(rtExpMs))
+      ? Math.max(rtExpMs - Date.now() - RT_FIRE_MARGIN_MS, 0)
+      : Math.max(this.snapshot.expiresAt - Date.now() - AT_SAFETY_MARGIN_MS, 0);
+
+    const mode = (rtExpMs && !isNaN(rtExpMs)) ? 'before-rt-expires' : 'before-at-expires-fallback';
+
     this._refreshTimer = setTimeout(async () => {
       try {
         await this.refresh();
-        // refresh() calls #scheduleAutoRefresh() on success via #adoptTokens flow
       } catch (e) {
         this.log('auth:autoRefresh:error', { message: e.message });
-        // Retry in 30s on transient failure; AuthError means session is dead.
-        if (!(e instanceof AuthError)) {
+        if (e instanceof AuthError) {
+          await this.#tryRelogin(e);
+        } else {
+          // Transient failure (network, etc.) — retry in 30s.
           this._refreshTimer = setTimeout(() => this.#scheduleAutoRefresh(), 30_000);
           if (this._refreshTimer.unref) this._refreshTimer.unref();
         }
@@ -266,7 +305,25 @@ export class AuthSession {
     }, delay);
     // Don't prevent the process from exiting naturally.
     if (this._refreshTimer.unref) this._refreshTimer.unref();
-    this.log('auth:autoRefresh:scheduled', { inMs: delay, at: new Date(Date.now() + delay).toISOString() });
+    this.log('auth:autoRefresh:scheduled', { mode, inMs: delay, at: new Date(Date.now() + delay).toISOString() });
+  }
+
+  async #tryRelogin(originalError) {
+    const username = this.snapshot?.username;
+    const password = this._password;
+    if (!username || !password) {
+      this.log('auth:autoRefresh:relogin:skipped', { reason: 'no stored credentials' });
+      if (this.onExpired) try { this.onExpired(originalError); } catch (_) {}
+      return;
+    }
+    this.log('auth:autoRefresh:relogin:start', { username });
+    try {
+      await this.login(username, password);
+      this.log('auth:autoRefresh:relogin:success', { username });
+    } catch (reLoginErr) {
+      this.log('auth:autoRefresh:relogin:failed', { message: reLoginErr.message });
+      if (this.onExpired) try { this.onExpired(originalError); } catch (_) {}
+    }
   }
 
   #clearAutoRefresh() {
@@ -283,10 +340,12 @@ export class AuthSession {
   }
 
   #adoptTokens(username, tokenResp, password) {
+    const { token: rt, expires: rtExp } = parseRefreshToken(tokenResp.refresh_token);
     this.snapshot = {
       username,
       accessToken: tokenResp.access_token,
-      refreshToken: tokenResp.refresh_token,
+      refreshToken: rt,
+      refreshTokenExpires: rtExp,
       expiresAt: tokenExpiry(tokenResp),
       sessionId: tokenResp.SessionId ? String(tokenResp.SessionId) : null,
     };
@@ -295,6 +354,29 @@ export class AuthSession {
 }
 
 // ---------- helpers ----------
+
+/**
+ * BT Trade wraps the refresh token in a JSON envelope:
+ *   {"Token":"<hex>","Expires":"<ISO datetime>"}
+ *
+ * Parse it and return the clean { token, expires } pair.
+ * If the value is already a plain string (future-proof / demo mode), treat it
+ * as the raw token with no known expiry.
+ *
+ * @param {string|null|undefined} raw
+ * @returns {{ token: string, expires: string|null }}
+ */
+export function parseRefreshToken(raw) {
+  if (!raw || typeof raw !== 'string') return { token: raw ?? '', expires: null };
+  try {
+    const obj = JSON.parse(raw);
+    if (obj && typeof obj.Token === 'string') {
+      return { token: obj.Token, expires: obj.Expires ?? null };
+    }
+  } catch (_) {}
+  // Plain token string — no expiry metadata available.
+  return { token: raw, expires: null };
+}
 
 /**
  * Resolve the access-token expiry from a token response.

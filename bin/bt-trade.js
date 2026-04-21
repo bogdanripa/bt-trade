@@ -16,7 +16,7 @@ import readline from 'node:readline/promises';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { BTTradeClient, stdinOtpProvider, ntfyOtpProvider, BTTradeError, AuthError } from '../src/index.js';
+import { BTTradeClient, stdinOtpProvider, ntfyOtpProvider, BTTradeError, AuthError, parseRefreshToken } from '../src/index.js';
 
 const DEBUG = process.argv.includes('--debug');
 let DEMO  = process.argv.includes('--demo');
@@ -29,7 +29,7 @@ function pickOtpMode() {
   return { mode: 'ntfy', topic: explicit };
 }
 const log = DEBUG
-  ? (tag, data) => console.error('[' + tag + ']', typeof data === 'string' ? data : JSON.stringify(data).slice(0, 300))
+  ? (tag, data) => console.error('[' + tag + ']', typeof data === 'string' ? data : JSON.stringify(data))
   : undefined;
 
 // ---------- prompt helpers ----------
@@ -148,21 +148,46 @@ function kv(obj, keys) {
 // ---------- menus ----------
 
 async function menu(title, items) {
+  // Split into normal items and pinned items (items with `at: N`).
+  const normal = items.filter((it) => !it.at);
+  const pinned = items.filter((it) => it.at);
+
+  // Build a number→item map.  Normal items fill 1..N sequentially (skipping
+  // any slots claimed by pinned items).  Pinned items sit at their fixed slot.
+  const byNumber = new Map();
+  const pinnedSlots = new Set(pinned.map((it) => it.at));
+  let n = 0;
+  for (const it of normal) {
+    if (it.separator) continue;
+    do { n++; } while (pinnedSlots.has(n));
+    byNumber.set(n, it);
+  }
+  for (const it of pinned) byNumber.set(it.at, it);
+
   while (true) {
     console.log('\n' + (typeof title === 'function' ? title() : title));
-    let menuIdx = 0;
-    items.forEach((it) => {
+
+    // Display normal items in order, then a separator, then pinned items.
+    let displayN = 0;
+    normal.forEach((it) => {
       if (it.separator) { console.log('  ' + '─'.repeat(38)); return; }
-      console.log(`  [${++menuIdx}] ${typeof it.label === 'function' ? it.label() : it.label}`);
+      do { displayN++; } while (pinnedSlots.has(displayN));
+      console.log(`  [${displayN}] ${typeof it.label === 'function' ? it.label() : it.label}`);
     });
+    if (pinned.length) {
+      console.log('  ' + '─'.repeat(38));
+      pinned.forEach((it) => {
+        console.log(`  [${it.at}] ${typeof it.label === 'function' ? it.label() : it.label}`);
+      });
+    }
+
     const raw = await ask('> ');
-    const idx = parseInt(raw, 10) - 1;
-    const selectable = items.filter((it) => !it.separator);
-    if (Number.isNaN(idx) || idx < 0 || idx >= selectable.length) {
+    const num = parseInt(raw, 10);
+    if (Number.isNaN(num) || !byNumber.has(num)) {
       console.log('  (pick a valid option)');
       continue;
     }
-    const chosen = selectable[idx];
+    const chosen = byNumber.get(num);
     if (chosen.back || chosen.quit) return chosen;
     const label = typeof chosen.label === 'function' ? chosen.label() : chosen.label;
     try { await chosen.run(); }
@@ -179,7 +204,7 @@ function mainMenu(client, ctx) {
     { label: 'Reference data...',        run: () => referenceMenu(client) },
     { label: 'Refresh token now',        run: () => doRefresh(client) },
     { label: 'Sign out',                 quit: 'logout' },
-    { label: 'Exit',                     quit: 'quit' },
+    { label: 'Exit',                     quit: 'quit',   at: 9 },
   ]);
 }
 
@@ -203,17 +228,9 @@ function referenceMenu(client) {
     ref('Evaluation currencies', () => client.reference.listEvaluationCurrencies()),
     ref('Account types',         () => client.reference.listAccountTypes()),
     ref('Order statuses',        () => client.reference.listOrderStatuses()),
-    ref('Trade operations',      () => client.reference.listTradeOperations()),
     ref('Trade types',           () => client.reference.listTradeTypes()),
-    ref('Portfolio intervals',   () => client.reference.listPortfolioIntervals()),
-    { label: 'Go back', back: true },
+    { label: 'Go back', back: true, at: 9 },
   ]);
-}
-
-function activeCurrencyName(ctx) {
-  if (!ctx.currencyId || !ctx.accounts) return null;
-  const active = ctx.accounts.find((a) => a.portfolioKey === ctx.activePortfolioKey) || ctx.accounts[0];
-  return active?.portfolios?.[0]?.currencies?.find((c) => c.id === ctx.currencyId)?.name ?? null;
 }
 
 function activeAccountName(ctx) {
@@ -229,24 +246,21 @@ function portfolioMenu(client, ctx) {
     { key: 'availableTransfer', label: 'Available', align: 'right', format: (v) => v?.value?.formatted ?? String(v ?? '') },
   ];
 
-  const holdingsCols = (cur = activeCurrencyName(ctx) ?? '?') => [
-    { key: 'Code',            label: 'Symbol',             max: 10 },
-    { key: 'Market',          label: 'Market',             max: 10 },
-    { key: 'SecurityBalance', label: 'Qty',                align: 'right' },
-    { key: 'AvgPrice',        label: 'Avg Price',          align: 'right' },
-    { key: 'LineEvaluation',  label: `Value (${cur})`,     align: 'right' },
-    { key: 'GainLoss',        label: `Gain/Loss (${cur})`, align: 'right' },
-    { key: 'PriceVariation',  label: 'Chg %',              align: 'right' },
+  const holdingsCols = () => [
+    { key: 'Code',            label: 'Symbol',   max: 10 },
+    { key: 'Market',          label: 'Market',   max: 10 },
+    { key: 'SecurityBalance', label: 'Qty',      align: 'right' },
+    { key: 'AvgPrice',        label: 'Avg Price',align: 'right' },
+    { key: 'Code',            label: 'Ccy',      max: 5, format: (_, row) => ctx.instrumentCurrencyMap?.get(`${row.Code}:${row.Market}`) ?? '?' },
+    { key: 'LineEvaluation',  label: 'Value',    align: 'right' },
+    { key: 'GainLoss',        label: 'Gain/Loss',align: 'right' },
+    { key: 'PriceVariation',  label: 'Chg %',   align: 'right' },
   ];
 
   return menu('HOLDINGS & CASH', [
     {
       label: () => `Account: ${activeAccountName(ctx) ?? '(none)'}`,
       run: async () => { await chooseAccount(client, ctx); },
-    },
-    {
-      label: () => `Currency: ${activeCurrencyName(ctx) ?? 'All'}`,
-      run: async () => { await chooseCurrency(client, ctx); },
     },
     {
       label: () => `Market: ${ctx.marketFilter ?? 'All'}`,
@@ -267,8 +281,19 @@ function portfolioMenu(client, ctx) {
         const k = await ensurePortfolio(client, ctx);
         heading('Holdings');
         const res = await client.portfolio.getHoldings({ portfolioKey: k, market: ctx.marketFilter ?? undefined });
-        const evalCur = res.Total?.CurrencyRates?.find((c) => c.ID === res.Total?.CurrencyId)?.Name ?? activeCurrencyName(ctx) ?? '?';
-        table(res.Positions.Items, holdingsCols(evalCur));
+        // Populate currency cache for any symbols not yet seen.
+        if (!ctx.instrumentCurrencyMap) ctx.instrumentCurrencyMap = new Map();
+        const newCodes = [...new Set(res.Positions.Items.map((p) => p.Code))]
+          .filter((code) => ![...ctx.instrumentCurrencyMap.keys()].some((k) => k.startsWith(code + ':')));
+        await Promise.all(newCodes.map(async (code) => {
+          try {
+            const matches = await client.markets.searchInstrument(code);
+            if (Array.isArray(matches)) {
+              matches.forEach((m) => { if (m.currency && m.market) ctx.instrumentCurrencyMap.set(`${m.code}:${m.market}`, m.currency); });
+            }
+          } catch (_) {}
+        }));
+        table(res.Positions.Items, holdingsCols());
         const suffix = ctx.marketFilter ? ` on ${ctx.marketFilter}` : ' across all markets';
         console.log(`  ${res.Positions.TotalItemCount} position${res.Positions.TotalItemCount !== 1 ? 's' : ''}${suffix}`);
       },
@@ -287,7 +312,7 @@ function portfolioMenu(client, ctx) {
         ]);
       },
     },
-    { label: 'Go back', back: true },
+    { label: 'Go back', back: true, at: 9 },
   ]);
 }
 
@@ -309,12 +334,17 @@ async function pickInstrument(client, symbolHint) {
   return results[idx];
 }
 
-async function doOrderPreview(client, ctx) {
-  heading('Order Preview');
+/**
+ * Interactively prompt for the parameters of an order.
+ * Returns { k, symbol, marketId, side, type, price, quantity, previewPrice } or null if cancelled.
+ * `previewPrice` is the price to use for Orders/GetOrderDetails — for market orders it's
+ * the live ask/bid (server preview is unreliable without a price); for limit orders it's `price`.
+ */
+async function promptOrderParams(client, ctx) {
   const k = await ensurePortfolio(client, ctx);
 
   const instrument = await pickInstrument(client);
-  if (!instrument) return;
+  if (!instrument) return null;
   const { code: symbol, marketId } = instrument;
 
   const sideRaw = await ask('Side [1=buy / 2=sell]: ');
@@ -325,15 +355,27 @@ async function doOrderPreview(client, ctx) {
 
   let price;
   if (type === 'limit') {
-    const pr = await ask('Price: ');
-    price = pr.trim() || undefined;
+    const prRaw = await ask('Price: ');
+    price = prRaw.trim() ? Number(prRaw.trim()) : undefined;
+    if (!price) { console.log('  invalid price'); return null; }
   }
 
   const qtyRaw = await ask('Quantity: ');
-  const quantity = qtyRaw.trim() || null;
+  const quantity = qtyRaw.trim() ? Number(qtyRaw.trim()) : null;
+  if (!quantity) { console.log('  invalid quantity'); return null; }
 
-  const r = await client.orders.preview({ portfolioKey: k, symbol, marketId, quantity, price, side, type });
+  let previewPrice = price;
+  if (type === 'market') {
+    const info = await client.markets.getInstrument({ portfolioKey: k, code: symbol, marketId });
+    previewPrice = side === 'buy' ? info.ask : info.bid;
+  }
+
+  return { k, symbol, marketId, side, type, price, quantity, previewPrice };
+}
+
+function printOrderPreview(r, type) {
   const fmt = (v) => v ? `${v.formatted} ${v.currency}` : '—';
+  if (type === 'market') console.log('  (market order — preview based on live ask/bid price)');
   console.log(`  Position      ${r.securityBalance ?? '—'}`);
   console.log(`  Est. price    ${fmt(r.computedPrice)}`);
   if (r.computedPrice?.info) console.log(`                (${r.computedPrice.info})`);
@@ -345,6 +387,63 @@ async function doOrderPreview(client, ctx) {
     });
   }
   console.log(`  Available     ${fmt(r.availableCash)}`);
+}
+
+async function doOrderPreview(client, ctx) {
+  heading('Order Preview');
+  const p = await promptOrderParams(client, ctx);
+  if (!p) return;
+
+  const r = await client.orders.preview({
+    portfolioKey: p.k, symbol: p.symbol, marketId: p.marketId,
+    quantity: p.quantity, price: p.previewPrice, side: p.side, type: 'limit',
+  });
+  printOrderPreview(r, p.type);
+}
+
+async function doPlaceOrder(client, ctx) {
+  heading('Place Order');
+  const p = await promptOrderParams(client, ctx);
+  if (!p) return;
+
+  // Show the preview first so the user knows what they're committing to.
+  console.log('\nPreview:');
+  try {
+    const r = await client.orders.preview({
+      portfolioKey: p.k, symbol: p.symbol, marketId: p.marketId,
+      quantity: p.quantity, price: p.previewPrice, side: p.side, type: 'limit',
+    });
+    printOrderPreview(r, p.type);
+  } catch (e) {
+    warn('preview (before placing)', e);
+    const proceed = (await ask('Preview failed — place order anyway? [y/N]: ')).trim().toLowerCase();
+    if (proceed !== 'y' && proceed !== 'yes') { console.log('  aborted'); return; }
+  }
+
+  const priceStr = p.type === 'market' ? 'MARKET' : String(p.price);
+  console.log(`\nAbout to place: ${p.side.toUpperCase()} ${p.quantity} ${p.symbol} @ ${priceStr} (${p.type})`);
+  const confirm = (await ask('Confirm? [y/N]: ')).trim().toLowerCase();
+  if (confirm !== 'y' && confirm !== 'yes') { console.log('  aborted'); return; }
+
+  console.log('\nPlacing order…');
+  const res = await client.orders.placeOrder({
+    portfolioKey: p.k,
+    symbol:       p.symbol,
+    marketId:     p.marketId,
+    quantity:     p.quantity,
+    price:        p.price,
+    side:         p.side,
+    type:         p.type,
+  });
+
+  // The SaveOrder response shape varies; surface OrderNumber if present, else raw response.
+  const orderNum = res?.orderNumber ?? res?.OrderNumber ?? res?.order?.orderNumber ?? null;
+  if (orderNum) {
+    console.log(`  ✓ Order placed — #${orderNum}`);
+  } else {
+    console.log('  ✓ Order submitted.');
+    if (DEBUG) console.log(JSON.stringify(res, null, 2));
+  }
 }
 
 function ordersMenu(client, ctx) {
@@ -364,6 +463,10 @@ function ordersMenu(client, ctx) {
     {
       label: 'Preview order',
       run: async () => { await doOrderPreview(client, ctx); },
+    },
+    {
+      label: 'Place order',
+      run: async () => { await doPlaceOrder(client, ctx); },
     },
     { separator: true },
     {
@@ -421,7 +524,7 @@ function ordersMenu(client, ctx) {
         Array.isArray(res) ? table(res) : dump(res);
       },
     },
-    { label: 'Go back', back: true },
+    { label: 'Go back', back: true, at: 9 },
   ]);
 }
 
@@ -481,41 +584,6 @@ async function ensurePortfolio(client, ctx) {
   return ctx.activePortfolioKey;
 }
 
-async function ensureCurrency(client, ctx) {
-  if (ctx.currencyId) return ctx.currencyId;
-  if (!ctx.accounts) await doAccounts(client, ctx);
-  const active = ctx.accounts.find((a) => a.portfolioKey === ctx.activePortfolioKey)
-    || ctx.accounts.find((a) => a.selected) || ctx.accounts[0];
-  const id = client.accounts.defaultCurrencyId(active);
-  if (id != null) { ctx.currencyId = id; return id; }
-  console.log('No portfolio-specific currency found for the active account.');
-  await chooseCurrency(client, ctx);
-  if (!ctx.currencyId) throw new Error('cannot determine a currencyId');
-  return ctx.currencyId;
-}
-
-async function chooseCurrency(client, ctx) {
-  if (!ctx.accounts) await doAccounts(client, ctx);
-  const active = ctx.accounts.find((a) => a.portfolioKey === ctx.activePortfolioKey)
-    || ctx.accounts.find((a) => a.selected) || ctx.accounts[0];
-  let list   = (active && active.portfolios && active.portfolios[0] && active.portfolios[0].currencies) || [];
-  let source = "active portfolio's currencies";
-  if (!list.length) { list = await client.reference.listEvaluationCurrencies(); source = 'evaluation currencies (global)'; }
-  if (!Array.isArray(list) || !list.length) { console.log('no currencies available'); return; }
-  console.log(`From: ${source}`);
-  const options = [{ id: null, name: 'All currencies' }, ...list];
-  options.forEach((c, i) => {
-    const mark = (i === 0 ? ctx.currencyId === null : c.id === ctx.currencyId) ? '★' : ' ';
-    console.log(` ${mark} [${i + 1}] ${c.name || c.description || ''}`);
-  });
-  const raw = await ask(`pick currency [1-${options.length}]: `);
-  const idx = parseInt(raw, 10) - 1;
-  if (idx >= 0 && idx < options.length) {
-    ctx.currencyId = options[idx].id;
-    console.log(ctx.currencyId === null ? 'currency filter cleared (all)' : 'display currency set to ' + options[idx].name);
-  }
-}
-
 async function chooseMarket(client, ctx) {
   const k = await ensurePortfolio(client, ctx);
   const res = await client.portfolio.getHoldings({ portfolioKey: k });
@@ -536,6 +604,7 @@ async function chooseMarket(client, ctx) {
   }
 }
 
+
 function formatRomanianName(raw) {
   if (!raw || typeof raw !== 'string') return '';
   const tokens = raw.trim().split(/\s+/).filter(Boolean);
@@ -549,32 +618,37 @@ function titleCase(s) {
   return String(s).toLowerCase().replace(/(^|[\s\-'])(\p{L})/gu, (_, p, c) => p + c.toUpperCase());
 }
 
+function rtFingerprint(snap) {
+  if (!snap?.refreshToken) return '(none)';
+  return `...${snap.refreshToken.slice(-8)} (expires ${snap.refreshTokenExpires ?? '?'})`;
+}
+
 async function doRefresh(client) {
   heading('Refreshing access token');
 
   const before        = client.toSnapshot();
-  const oldRefreshTail = before?.refreshToken ? before.refreshToken.slice(-8) : '(none)';
   const oldAccessTail  = before?.accessToken  ? before.accessToken.slice(-8)  : '(none)';
   const oldExp         = before?.expiresAt    ? new Date(before.expiresAt).toISOString() : '(unknown)';
 
   console.log('Before:');
   console.log('  access_token  fingerprint:', oldAccessTail);
-  console.log('  refresh_token fingerprint:', oldRefreshTail);
-  console.log('  access expires:           ', oldExp);
+  console.log('  refresh_token            :', rtFingerprint(before));
+  console.log('  access expires:          ', oldExp);
 
   await client.auth.refresh();
 
   const after         = client.toSnapshot();
-  const newRefreshTail = after?.refreshToken ? after.refreshToken.slice(-8) : '(none)';
   const newAccessTail  = after?.accessToken  ? after.accessToken.slice(-8)  : '(none)';
   const newExp         = after?.expiresAt    ? new Date(after.expiresAt).toISOString() : '(unknown)';
-  const rotated        = oldRefreshTail !== newRefreshTail;
   const accessRotated  = oldAccessTail  !== newAccessTail;
+  const rtBefore       = rtFingerprint(before);
+  const rtAfter        = rtFingerprint(after);
+  const rotated        = rtBefore !== rtAfter;
 
   console.log('\nAfter:');
-  console.log('  access_token  fingerprint:', newAccessTail,  accessRotated ? '(ROTATED)' : '(unchanged)');
-  console.log('  refresh_token fingerprint:', newRefreshTail, rotated ? '(ROTATED)' : '(UNCHANGED)');
-  console.log('  access expires:           ', newExp);
+  console.log('  access_token  fingerprint:', newAccessTail, accessRotated ? '(ROTATED)' : '(unchanged)');
+  console.log('  refresh_token            :', rtAfter, rotated ? '(ROTATED)' : '(UNCHANGED)');
+  console.log('  access expires:          ', newExp);
 
   if (accessRotated && !rotated) {
     console.log('\nDiagnostic: refresh-token appears NOT to rotate.');
@@ -590,6 +664,13 @@ function loadSavedSession() {
     if (!fs.existsSync(SESSION_FILE)) return null;
     const snap = JSON.parse(fs.readFileSync(SESSION_FILE, 'utf8'));
     if (!snap || !snap.accessToken || !snap.refreshToken) return null;
+    // Migrate old sessions that stored the raw JSON envelope as refreshToken.
+    if (snap.refreshToken.startsWith('{')) {
+      const { token, expires } = parseRefreshToken(snap.refreshToken);
+      snap.refreshToken = token;
+      snap.refreshTokenExpires = snap.refreshTokenExpires ?? expires;
+      saveSession(snap);   // rewrite in new format
+    }
     return snap;
   } catch (e) {
     if (DEBUG) console.error('[saved-session] read failed:', e.message);
@@ -629,32 +710,46 @@ async function main() {
       ? ntfyOtpProvider({ topic: otpMode.topic || undefined, log })
       : stdinOtpProvider(),
     log,
+    debug: DEBUG,
     onSessionChange: saveSession,
+    onExpired: () => {
+      console.error('\n[session] Session expired and could not be renewed automatically. Please log in again.\n');
+    },
   });
 
   const saved = loadSavedSession();
   let usedSaved = false;
 
   if (saved) {
-    const tokenStillValid = saved.expiresAt && Date.now() < saved.expiresAt - 30_000;
+    const tokenStillValid  = saved.expiresAt && Date.now() < saved.expiresAt - 30_000;
+    const rtExpMs          = saved.refreshTokenExpires ? new Date(saved.refreshTokenExpires).getTime() : null;
+    const rtStillValid     = rtExpMs ? Date.now() < rtExpMs : true; // assume ok if unknown
     console.log(`Saved session found for ${saved.username}`);
-    console.log(`  (access token ${accessAge(saved.expiresAt)})`);
+    console.log(`  (access token  ${accessAge(saved.expiresAt)})`);
+    if (rtExpMs) {
+      console.log(`  (refresh token ${rtStillValid ? `valid, expires in ~${Math.round((rtExpMs - Date.now()) / 60000)}m` : 'EXPIRED — will need fresh login'})`);
+    }
     const choice = (await ask('  [1] use saved session   [2] log in fresh   > ')).trim();
     if (choice === '' || choice === '1') {
-      try {
-        client.restore(saved);
-        if (!tokenStillValid) {
-          // Access token is expired or near expiry — refresh now so we start with a fresh one.
-          await client.auth.refresh();
-        }
-        usedSaved = true;
-        console.log('Saved session restored.');
-      } catch (e) {
-        if (e instanceof AuthError) {
-          saveSession(null);
-          console.log(`Saved session no longer valid (${e.code}${e.status ? ' ' + e.status : ''}) — falling back to fresh login.`);
-        } else {
-          throw e;
+      if (rtExpMs && !rtStillValid) {
+        saveSession(null);
+        console.log('Refresh token has expired — please log in fresh.');
+      } else {
+        try {
+          client.restore(saved);
+          if (!tokenStillValid) {
+            // Access token is expired or near expiry — refresh now so we start with a fresh one.
+            await client.auth.refresh();
+          }
+          usedSaved = true;
+          console.log('Saved session restored.');
+        } catch (e) {
+          if (e instanceof AuthError) {
+            saveSession(null);
+            console.log(`Saved session no longer valid (${e.code}${e.status ? ' ' + e.status : ''}) — falling back to fresh login.`);
+          } else {
+            throw e;
+          }
         }
       }
     } else {
@@ -671,7 +766,7 @@ async function main() {
   }
 
   const snap = client.toSnapshot();
-  const ctx  = { accounts: null, activePortfolioKey: null, profile: null, currencyId: null, marketFilter: null };
+  const ctx  = { accounts: null, activePortfolioKey: null, profile: null, marketFilter: null, instrumentCurrencyMap: null };
 
   try {
     ctx.profile = await client.profile.get();

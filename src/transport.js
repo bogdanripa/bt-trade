@@ -24,6 +24,7 @@ const AUTH_EXCLUSIONS = ['/api/auth/time', '/api/auth/token'];
  * @property {string} [pathPrefix]     - prepended to every path, e.g. '/demo' for demo mode
  * @property {object} [session]        - AuthSession (see auth.js)
  * @property {(msg:string,data?:any)=>void} [log]  - optional logger for debug
+ * @property {boolean} [debug]         - when true, log full unredacted bodies (tokens visible)
  * @property {number} [timeoutMs]      - per-request timeout (default 30_000)
  */
 
@@ -34,6 +35,7 @@ export class Transport {
     this.pathPrefix = opts.pathPrefix || '';
     this.session = opts.session || null;
     this.log = opts.log || (() => {});
+    this.debug = opts.debug ?? false;
     this.timeoutMs = opts.timeoutMs ?? 30_000;
   }
 
@@ -83,7 +85,12 @@ export class Transport {
       }
     }
 
-    this.log('http:request', { method, url: redactUrl(url), headers: redactHeaders(headers), body: redactBody(body) });
+    this.log('http:request', {
+      method,
+      url: this.debug ? url : redactUrl(url),
+      headers: this.debug ? headers : redactHeaders(headers),
+      body: this.debug ? body : redactBody(body),
+    });
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
@@ -102,12 +109,12 @@ export class Transport {
 
     this.log('http:response', {
       status: res.status,
-      url: redactUrl(url),
-      // Print enough of the body to see refresh_token presence, but still
-      // redacted. For auth endpoints show more; for data endpoints keep short.
-      bodyPreview: typeof text === 'string'
-        ? redactBody(text).slice(0, url.includes('/RefreshToken') ? 2000 : 400)
-        : text,
+      url: this.debug ? url : redactUrl(url),
+      body: this.debug
+        ? text
+        : (typeof text === 'string'
+            ? redactBody(text).slice(0, url.includes('/RefreshToken') ? 2000 : 400)
+            : text),
     });
 
     if (res.status === 401 && needsAuth && !opts.isRetry && !opts.noRefresh && this.session) {

@@ -100,7 +100,7 @@ export class OrdersApi {
    * @param {string} args.portfolioKey
    * @param {string} args.symbol          - ticker code, e.g. "TVBETETF"
    * @param {number} args.marketId        - exchange ID from markets.list()
-   * @param {number|string|null} [args.quantity]
+   * @param {number|null} [args.quantity]
    * @param {number|string} args.price
    * @param {'buy'|'sell'} args.side
    * @param {'limit'|'market'} [args.type]  - default 'limit'
@@ -114,8 +114,8 @@ export class OrdersApi {
       body: {
         portfolioKey,
         symbol: { code: symbol, marketId: Number(marketId) },
-        quantity: quantity !== null && quantity !== undefined ? String(quantity) : null,
-        price:    price !== undefined && price !== null ? String(price) : null,
+        quantity: quantity !== null && quantity !== undefined ? Number(quantity) : null,
+        price:    price !== undefined && price !== null ? Number(price) : null,
         side,
         type,
       },
@@ -130,8 +130,8 @@ export class OrdersApi {
    * @param {string} args.portfolioKey
    * @param {string} args.symbol           - ticker code, e.g. "TVBETETF"
    * @param {number} args.marketId         - exchange ID from markets.list()
-   * @param {number|string} args.quantity
-   * @param {number|string} args.price
+   * @param {number} args.quantity
+   * @param {number} [args.price]
    * @param {'buy'|'sell'} args.side
    * @param {'limit'|'market'} [args.type]        - default 'limit'
    * @param {'day'|'gtc'|string} [args.valability] - default 'day'
@@ -148,9 +148,9 @@ export class OrdersApi {
     const order = {
       symbol:      { code: symbol, marketId: Number(marketId) },
       portfolioKey,
-      quantity:    String(quantity),
+      quantity:    Number(quantity),
       side,
-      price:       price !== undefined && price !== null ? String(price) : null,
+      price:       price !== undefined && price !== null ? Number(price) : null,
       type,
       valability,
       signed:      false,

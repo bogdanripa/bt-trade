@@ -31,18 +31,9 @@ export class ReferenceApi {
     return this.transport.get('/api/api/Nomenclatures/GetOrderStatuses');
   }
 
-  /** Trade operation types. */
-  listTradeOperations() {
-    return this.transport.get('/api/api/Nomenclatures/GetTradeOperations');
-  }
-
   /** Trade types. */
   listTradeTypes() {
     return this.transport.get('/api/api/Nomenclatures/GetTradeTypes');
   }
 
-  /** Portfolio reporting intervals (Today, YTD, 1M, 1Y, ...). */
-  listPortfolioIntervals() {
-    return this.transport.get('/api/api/Nomenclatures/GetIntervalsPortfolioSheet');
-  }
 }
