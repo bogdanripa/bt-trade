@@ -24,281 +24,247 @@ the terms of service of the platform before using.
 
 ## Install
 
-Drop the folder into your project or `npm link` it. There are no dependencies
-to install.
+```bash
+npm install @bogdanripa/bt-trade
+```
+
+Or drop the source folder into your project — there are no dependencies.
 
 ## Quick start
 
 ```js
-import { BTTradeClient, stdinOtpProvider } from 'bt-trade';
+import { BTTradeClient, stdinOtpProvider } from '@bogdanripa/bt-trade';
 
 const client = new BTTradeClient({
-  otpProvider: stdinOtpProvider(),       // or your own (e.g. SMS-forwarder, Telegram bot)
+  otpProvider: stdinOtpProvider(),   // prompts the terminal for the SMS code
 });
 
-await client.login({ username, password });
+await client.login({ username: 'MYUSER', password: process.env.BT_PASS });
 
-const profile   = await client.profile.get();
-const exchanges = await client.markets.listExchanges();
-const accounts  = await client.accounts.list();
+const accounts = await client.accounts.list();
+const { portfolioKey } = accounts[0];
 
-const active = accounts.find((a) => a.selected) || accounts[0];
-const positions = await client.portfolio.listPositions({ portfolioKey: active.portfolioKey });
-const orders    = await client.orders.search({ portfolioKey: active.portfolioKey });
+const holdings = await client.portfolio.getHoldings({ portfolioKey });
+const orders   = await client.orders.search({ portfolioKey });
 ```
 
-Run the bundled example end-to-end:
+Run the bundled interactive CLI:
 
-```
-node bin/bt-trade.js --debug
+```bash
+npx bt-trade
+# or
+node bin/bt-trade.js [--demo] [--debug] [--ntfy-topic <topic>] [--otp-stdin]
 ```
 
 ## Authentication
 
-1. `login()` sends username/password to `POST /api/RefreshToken`.
-2. If 2FA is required the server replies with a pending `access_token`, a
-   `prefix` (display-only), and a `details` string announcing the SMS.
-3. `BTTradeClient` calls your `otpProvider(info)` to obtain the SMS code.
-4. Step 2 posts the same body with `?code=<otp>` in the URL and the pending
-   token as `Authorization: Bearer`.
-5. On success you get `access_token` (~10 min lifetime), `refresh_token`,
-   `SessionId`.
+1. `login()` posts username + password to `POST /api/RefreshToken`.
+2. If 2FA is required the server returns a pending `access_token` and sends an SMS.
+3. `BTTradeClient` calls your `otpProvider({ username, prefix, details, expiresIn })` to get the code.
+4. Step 2 re-posts with `?code=<otp>` and the pending token as `Authorization: Bearer`.
+5. On success you receive an `access_token` (~10 min) and a `refresh_token`.
 
-The client persists tokens in memory (via `AuthSession`). Snapshot them for
-long-running processes:
+### Token lifecycle
+
+The refresh token is a rotating credential. Each time the access token is refreshed, a new pair is issued. The library handles this automatically:
+
+- **Background timer** fires a few seconds before the refresh token expires and refreshes both tokens silently, keeping the session alive indefinitely as long as the process is running.
+- **On-request lazy refresh** — if the access token has expired by the time a request fires (e.g. the process was paused), it is refreshed transparently before the call.
+- **Reactive 401 retry** — if the server rejects a request, the token is refreshed and the request is retried once.
+- **Auto re-login** — if the refresh token itself expires (process was idle too long), and the client has credentials in memory from a fresh login this session, it logs back in automatically including re-prompting for the OTP via the configured provider.
+
+### Persisting sessions
 
 ```js
-const snap = client.toSnapshot();         // { username, accessToken, refreshToken, expiresAt, sessionId }
-// save snap to disk, database, keychain, ...
-// later:
-const client2 = new BTTradeClient();
+// After login, save for later:
+const snap = client.toSnapshot();
+// → { username, accessToken, refreshToken, refreshTokenExpires, expiresAt, sessionId }
+// Persist however you like (file, keychain, env var, …)
+
+// Next process start — restore without re-entering credentials:
+const client2 = new BTTradeClient({ otpProvider: stdinOtpProvider() });
 client2.restore(snap);
-await client2.profile.get();              // works — auto-refreshes the access token if near expiry
+await client2.profile.get();   // works immediately; refreshes token if needed
 ```
 
-### Token refresh
+## Public API
 
-The transport refreshes automatically in two cases:
-
-- **proactively**, when the next request finds the access token within 60 s
-  of expiry;
-- **reactively**, on a `401` response, retrying the original request once.
-
-Concurrent requests that arrive during a refresh share a single in-flight
-refresh promise so the refresh token is used only once per cycle.
-
-## Public surface
-
-```
-client.login({ username, password })
+```js
+// Client lifecycle
+client.login({ username, password })     // → SessionSnapshot
 client.restore(snapshot)
-client.toSnapshot()
+client.toSnapshot()                      // → SessionSnapshot | null
 client.logout()
 
-client.profile.get({ device })                         // GET /User/GetUserProfile
-client.markets.listExchanges()                         // GET /Nomenclatures/GetExchanges — trading venues
+// Profile
+client.profile.get()
 
-// Reference data (enums, lookups) — server-side nomenclatures. Cache locally.
+// Markets
+client.markets.list()                    // all exchanges
+client.markets.searchInstrument(code)    // find instrument by ticker → [{ code, marketId, market, currency, … }]
+client.markets.getInstrument({ portfolioKey, code, marketId })
+                                         // live bid/ask + trading rules for one instrument
+
+// Reference data (enums — cache locally, rarely change)
 client.reference.listCurrencies()
 client.reference.listEvaluationCurrencies()
 client.reference.listAccountTypes()
 client.reference.listOrderStatuses()
-client.reference.listTradeOperations()
 client.reference.listTradeTypes()
-client.reference.listPortfolioIntervals()
 
-client.accounts.list()                                 // normalized from profile.clients[]
-client.accounts.getAvailableTypes(portfolioKey)        // GET /Client/GetAvailableAccountTypes
+// Accounts
+client.accounts.list()                   // normalized list from profile
+client.accounts.getAvailableTypes(portfolioKey)
 
-// Portfolio — currencyId is REQUIRED by the server for balance endpoints.
-// Take it from profile.selectedPortfolioPanelCurrencyID or listEvaluationCurrencies().
-client.portfolio.getBalance({ portfolioKey, currencyId })
-client.portfolio.getBalanceInfo({ portfolioKey, currencyId })
-client.portfolio.getAccountsTransfer({ portfolioKey })
+// Portfolio
+client.portfolio.getCash({ portfolioKey, currencyId })
+client.portfolio.getCashDetails({ portfolioKey, currencyId })
+client.portfolio.getCashAccounts({ portfolioKey })
 client.portfolio.getBankAccounts({ portfolioKey })
-// endDate accepts Date | 'YYYY-MM-DD' | 'DD.MM.YYYY' — sent as DD.MM.YYYY (server requirement).
-client.portfolio.listPositions({ portfolioKey, endDate, queryModel })   // POST /Portfolio/Select
+client.portfolio.getHoldings({ portfolioKey, market?, endDate?, queryModel? })
 
-client.orders.search({ portfolioKey, statuses, side, symbol, interval, startDate, endDate, queryModel })
+// Orders
+client.orders.search({ portfolioKey, statuses?, side?, symbol?,
+                        startDate?, endDate?, queryModel? })
 client.orders.get(orderNumber)
 client.orders.getActions(orderNumber)
 client.orders.getHistory(orderNumber)
+client.orders.preview({ portfolioKey, symbol, marketId, quantity?,
+                         price, side, type? })
+client.orders.placeOrder({ portfolioKey, symbol, marketId, quantity,
+                            price?, side, type?, valability? })
 ```
 
-All methods return parsed JSON from the server.
+All methods return the parsed JSON response from the server.
+
+### Placing an order
+
+```js
+// 1. Find the instrument and its marketId
+const [instrument] = await client.markets.searchInstrument('TVBETETF');
+const { code, marketId } = instrument;
+
+// 2. (Optional) preview fees before committing
+const preview = await client.orders.preview({
+  portfolioKey, symbol: code, marketId,
+  quantity: 10, price: 12.50, side: 'buy', type: 'limit',
+});
+console.log(preview.netValue, preview.commission);
+
+// 3. Place
+const result = await client.orders.placeOrder({
+  portfolioKey, symbol: code, marketId,
+  quantity: 10, price: 12.50, side: 'buy',
+  type: 'limit',      // 'limit' | 'market'
+  valability: 'day',  // 'day'   | 'gtc'
+});
+```
+
+For **market orders**, always preview with a `type: 'limit'` and the current
+ask/bid as the price — the server's market-order preview is uncapped and
+returns worst-case figures that are meaningless. Use `markets.getInstrument()`
+to get live ask/bid:
+
+```js
+const info = await client.markets.getInstrument({ portfolioKey, code, marketId });
+const preview = await client.orders.preview({
+  portfolioKey, symbol: code, marketId,
+  quantity: 1, price: side === 'buy' ? info.ask : info.bid,
+  side, type: 'limit',
+});
+```
 
 ## OTP providers
 
-`otpProvider` is an `async (info) => string` where `info` carries
-`{ username, prefix, details, expiresIn }`. The default
-`stdinOtpProvider()` prompts on the terminal. The library ships two more
-providers ready to use, and a custom one is a one-liner:
+`otpProvider` is an `async ({ username, prefix, details, expiresIn }) => string`.
+Three are included:
 
 ```js
 import { BTTradeClient, stdinOtpProvider, ntfyOtpProvider } from '@bogdanripa/bt-trade';
 
-// Terminal entry (interactive only)
+// Interactive terminal
 new BTTradeClient({ otpProvider: stdinOtpProvider() });
 
-// Phone-shortcut delivery via ntfy.sh (works headless)
-new BTTradeClient({ otpProvider: ntfyOtpProvider() });
+// Headless: phone shortcut forwards SMS to ntfy.sh (see below)
+new BTTradeClient({ otpProvider: ntfyOtpProvider({ topic: 'my-secret-topic' }) });
 
-// Fully custom (Telegram bot, IMAP scraper, SMS-forwarder webhook, ...)
+// Fully custom (Telegram bot, IMAP, webhook, …)
 new BTTradeClient({
-  otpProvider: async ({ username, prefix, details }) => {
-    // ... however you fetch the code ...
+  otpProvider: async ({ prefix, details }) => {
+    // fetch the code however you like, return just the digits
     return '12345';
   },
 });
 ```
 
-Only the digits the user typed are sent; the `prefix` is display-only. The
-client normalizes by stripping non-digits and removing the prefix if the user
-accidentally included it.
+### ntfy.sh + phone shortcut (recommended for headless use)
 
-### ntfy.sh + phone shortcut (recommended for headless / scheduled use)
+`ntfyOtpProvider()` subscribes to a free [ntfy.sh](https://ntfy.sh) topic and
+waits for the SMS code to arrive. A shortcut on your phone forwards the raw
+BT Trade SMS to that topic. No inbound port, no tunnel, no account required.
 
-`ntfyOtpProvider()` long-polls a free [ntfy.sh](https://ntfy.sh) topic for the
-SMS code. A shortcut on your phone forwards the digits to that topic when the
-BT Trade SMS arrives. Stable URL, no inbound port, no tunnel, no account, zero
-ops.
-
-**Multi-account safe.** Multiple Node processes can share one ntfy topic
-because each provider filters incoming messages by its own `username`. Other
-users' codes are ignored.
-
-#### 1. Pick (or derive) your topic
-
-If you don't pass a `topic`, one is derived from the username:
-`bt-trade-otp-<sha256(username)[0:16]>`. Stable across runs, unique per user.
-Compute it ahead of time so you know what URL to put in the shortcut:
+**Pick a topic:**
 
 ```js
 import { defaultNtfyTopic } from '@bogdanripa/bt-trade';
 console.log(defaultNtfyTopic('MYUSER'));
 // → bt-trade-otp-a1b2c3d4e5f60718
-// → URL: https://ntfy.sh/bt-trade-otp-a1b2c3d4e5f60718
 ```
 
-For stronger secrecy, pass an explicit unguessable topic:
+Or pass your own unguessable string:
 
 ```js
 ntfyOtpProvider({ topic: 'bt-trade-' + crypto.randomUUID() })
 ```
 
-> **Security note:** the OTP alone is useless without the password (BT Trade
-> requires both in the same request), so the default deterministic topic is
-> generally fine for personal use. If you want defense in depth, use an
-> explicit random topic and treat it like a password.
+**iOS automation (Shortcuts):**
 
-#### 2. Build the iOS automation (Apple)
+1. **Automation** → **+** → trigger: **Message** → filter on the BT Trade sender.
+2. Enable **Run Immediately**.
+3. Action: **Get Contents of URL** — `POST https://ntfy.sh/<topic>`, body type `JSON`, one key `body` = the **Message** magic variable.
 
-Zero typing — triggered automatically when the BT Trade SMS arrives. The
-automation just forwards the entire SMS body to ntfy. The Node side picks the
-5-digit code out of the body using the prefix the server returned in step 1
-(e.g. `25-74456` → `74456`).
+**Android:** Tasker / MacroDroid / any SMS-forwarder app — POST the raw SMS body to `https://ntfy.sh/<topic>`.
 
-1. Open **Shortcuts** → **Automation** tab → **+** → **New Automation**.
-2. Choose **Message** as the trigger.
-   - **Sender**: any
-   - **Message Contains**: este codul unic SMS generat. Verificati prefixul sa coincida cu cele de pe ecran, in caz contrar nu introduceti datele!
-   - Turn **Run Immediately** on so it fires without a confirmation tap (iOS 18+).
-3. Add a single action: **Get Contents of URL**.
-   - **URL**: `https://ntfy.sh/<your-topic>` — the URL from step 1 above.
-   - **Method**: `POST`.
-   - **Request Body**: `JSON` (the Shortcuts app only offers JSON / Form /
-     File for POST bodies — Text is not an option).
-   - Add **one key** to the JSON:
-     - Key: `body`
-     - Value: tap the variable picker and insert the **Message** /
-       **SMS Content** magic variable.
-4. Save.
-
-What lands on ntfy is `{"body":"Codul tau de autentificare BT Trade este 25-74456 ..."}`.
-The Node `ntfyOtpProvider` recognizes the wrapper, pulls out the inner text,
-matches `25-(\d+)` using the prefix the server returned in step 1 of the
-login, and returns `74456`.
-
-> The sender-ID filter is what keeps random SMS (2-factor codes from other
-> services, marketing messages) from accidentally hitting the ntfy topic.
-
-> The wrapper key can be any of `body`, `message`, `text`, `sms`, or
-> `content` — pick whichever makes the shortcut readable.
-
-#### 3. Build the Android equivalent (any of these works)
-
-- **Tasker** — *Received Text* event filtered on the BT Trade sender → *HTTP Request* action, body = `%SMSRB` (the SMS body variable).
-- **MacroDroid** — *SMS Received* trigger with a sender filter → *HTTP Request* with body = `[sms_message]`.
-- **SMS Forwarder** apps — most have a "forward matching SMS to URL" template.
-
-The point is: forward the **raw SMS body**. Don't pre-extract the code; the
-Node provider does that, using the prefix the server returned. This keeps the
-phone side trivial and tolerant of wording changes in the SMS.
-
-#### 4. Use it from Node
-
-```js
-import { BTTradeClient, ntfyOtpProvider } from '@bogdanripa/bt-trade';
-
-const client = new BTTradeClient({
-  otpProvider: ntfyOtpProvider({ /* topic: optional */ }),
-});
-
-await client.login({ username: 'MYUSER', password: process.env.BT_PASS });
-// ...your normal calls...
-```
-
-Or with the bundled CLI:
-
-```bash
-node bin/bt-trade.js                    # ntfy.sh, default topic from username
-node bin/bt-trade.js --ntfy-topic foo   # explicit topic
-BT_NTFY_TOPIC=foo node bin/bt-trade.js  # same, via env
-node bin/bt-trade.js --otp-stdin        # fall back to terminal entry
-```
+The provider extracts the 5-digit code from the raw SMS text using the `prefix`
+the server returned (e.g. `25-74456` → `74456`). Multiple processes can share
+one topic safely — each filters by its own `username`.
 
 ## Errors
 
-All errors thrown from the public API extend `BTTradeError`:
+All errors extend `BTTradeError`:
 
-| Class             | `code`             | When                                                     |
-| ----------------- | ------------------ | -------------------------------------------------------- |
-| `AuthError`       | `AUTH_ERROR`       | 401/403, wrong OTP, expired refresh token                |
-| `NetworkError`    | `NETWORK_ERROR`    | fetch failures (DNS, TLS, abort, timeout)                |
-| `ApiError`        | `API_ERROR`        | other non-2xx responses                                  |
-| `ValidationError` | `VALIDATION_ERROR` | bad input before a request was sent                      |
+| Class             | When                                              |
+| ----------------- | ------------------------------------------------- |
+| `AuthError`       | 401/403, wrong OTP, expired or rejected tokens    |
+| `NetworkError`    | fetch failures (DNS, TLS, timeout)                |
+| `ApiError`        | other non-2xx responses                           |
+| `ValidationError` | bad arguments before any request was sent         |
 
-`err.status`, `err.body`, `err.cause` are populated where applicable.
+`err.status`, `err.body`, `err.cause` are set where applicable.
 
-## What this client intentionally does not do
+## What this client does not do
 
-- **No SignalR / WebSocket.** Portfolio and order screens in the BT Trade web
-  app use SignalR for live price/PNL updates on top of an initial HTTP
-  snapshot. This client only exposes the snapshot endpoints. If you need
-  push updates, build them on top of this module.
-- **No trading yet.** `SaveOrder`, `SaveChangeOrder`, `PerformAction` and the
-  biometric/trading-password endpoints are intentionally omitted. The source
-  references were catalogued but those flows require captcha + questionnaire
-  answers, which are out of scope for this first pass.
-- **No disk-based session persistence.** `toSnapshot()` / `restore()` let you
-  persist wherever you prefer.
+- **No SignalR / WebSocket.** The web app uses SignalR for live price/PNL
+  updates. This client only exposes the underlying HTTP snapshot endpoints.
+- **No disk-based session persistence.** `toSnapshot()` / `restore()` give you
+  the data; where you store it is up to you.
 
 ## Files
 
 ```
-package.json
 src/
   index.js          public exports
-  client.js         BTTradeClient (composes everything)
-  auth.js           AuthSession: login, refresh, OTP normalization
-  transport.js      fetch wrapper with auth + 401 retry
+  client.js         BTTradeClient
+  auth.js           AuthSession — login, refresh, OTP, auto re-login
+  transport.js      fetch wrapper with auth injection and 401 retry
   errors.js         BTTradeError hierarchy
   endpoints/
     profile.js
-    markets.js
+    markets.js      list, searchInstrument, getInstrument
     accounts.js
-    portfolio.js
-    orders.js
+    portfolio.js    getCash, getHoldings, …
+    orders.js       search, preview, placeOrder, …
+    reference.js    currencies, account types, order statuses, …
 bin/
-  bt-trade.js       example script that exercises every read-only endpoint
+  bt-trade.js       interactive CLI (demo of every endpoint)
 ```
