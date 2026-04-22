@@ -222,9 +222,16 @@
  * @typedef {object} PositionItem
  * @property {string}  Key
  * @property {string}  Code
+ * @property {number}  ExchangeId
+ * @property {string|null} Exchange
+ * @property {number}  MarketId
  * @property {string}  Market
  * @property {string}  MarketState
  * @property {string}  SecurityName
+ * @property {number}  CurrencyId
+ * @property {string}  Currency
+ * @property {number}  MarketCurrencyId
+ * @property {string}  MarketCurrency
  * @property {number}  InvestmentAmmount   - server typo; mirrors the live field name
  * @property {number}  SecurityBalance
  * @property {number}  AvgPrice
