@@ -216,23 +216,7 @@ export class AuthSession {
           refresh_token: rt,
         };
         // Real mode uses form-encoded; demo mode uses JSON (same endpoint, different format).
-        const rfUrl = `${this.transport.baseUrl.replace(/\/$/, '')}${this.transport.pathPrefix}${AUTH_PATH}`;
-        const rfEncoding = this.demo ? 'json' : 'form-urlencoded';
-        console.log('[BT refresh] POST', rfUrl, `(${rfEncoding})`);
-        console.log('[BT refresh] payload:', body);
-        let r;
-        try {
-          r = await this.transport.post(AUTH_PATH, { body, form: !this.demo, noAuth: true });
-          console.log('[BT refresh] response 2xx:', r);
-        } catch (e) {
-          console.log('[BT refresh] response error:', {
-            status: e.status ?? null,
-            code: e.code,
-            message: e.message,
-            body: e.body ?? null,
-          });
-          throw e;
-        }
+        const r = await this.transport.post(AUTH_PATH, { body, form: !this.demo, noAuth: true });
         if (!r.access_token) {
           throw new AuthError('Refresh response missing access_token', { body: r });
         }
