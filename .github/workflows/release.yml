@@ -1,0 +1,58 @@
+name: Release
+
+# Auto-bumps the npm patch version and publishes to npm on every push to main.
+# The bump commit itself contains `[skip ci]`, so it does not re-trigger the
+# workflow.
+#
+# Setup required (one-time):
+#   1. Create an "Automation" token at https://www.npmjs.com/settings/<you>/tokens
+#   2. Add it to the repo as secret NPM_TOKEN
+#      (Settings → Secrets and variables → Actions → New repository secret).
+#
+# To skip a release on a particular commit, include `[skip ci]` anywhere in the
+# commit message. To force a minor/major bump instead, do `npm version
+# minor|major` locally and push the resulting commit (it will already be
+# tagged; this workflow's contains-skip-ci check sees the tag-commit message
+# `release vX.Y.Z` and still runs unless you add `[skip ci]` yourself).
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Configure git author
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Verify entry points parse
+        run: npm run check
+
+      - name: Bump patch version (creates commit + tag)
+        run: npm version patch -m "release %s [skip ci]"
+
+      - name: Publish to npm
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Push commit and tag
+        run: git push origin HEAD:main --follow-tags
